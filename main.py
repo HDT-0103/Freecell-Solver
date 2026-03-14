@@ -57,10 +57,19 @@ class FreeCellApp:
             text_color=(255, 244, 210),
         )
 
+        # Nut Undo trong scene game
+        self.undo_button = Button(
+            text="Undo",
+            rect=pygame.Rect(self.screen.get_width() // 2 - 70, self.screen.get_height() - 60, 140, 42),
+            base_color=(27, 104, 132), hover_color=(38, 126, 160),
+            text_color=(245, 250, 215),
+        )
+
         # Khoi tao state va renderer
         loader          = CardImageLoader(base_dir=CARD_IMAGE_DIR, card_size=(110, 154))
         self.game_state = GameState()
         self.board      = BoardRenderer(self.screen.get_rect(), loader, self.game_state)
+        self.is_stuck = False
 
     # ------------------------------------------------------------------
     # Vong lap chinh
@@ -69,6 +78,9 @@ class FreeCellApp:
     def run(self) -> None:
         while self.running:
             self._handle_events()
+            # Cap nhat flag khi ket sau moi frame
+            if self.scene == "game":
+                self._refresh_game_flags()
             self._draw()
             pygame.display.flip()
             self.clock.tick(60)
@@ -94,6 +106,7 @@ class FreeCellApp:
             if self.start_button.rect.collidepoint(event.pos):
                 self.game_state.reset()
                 self.board.on_reset()
+                self._refresh_game_flags()
                 self.scene = "game"
             elif self.exit_button.rect.collidepoint(event.pos):
                 self.running = False
@@ -105,15 +118,26 @@ class FreeCellApp:
             elif event.key == pygame.K_r:
                 self.game_state.reset()
                 self.board.on_reset()
+                self._refresh_game_flags()
+            elif event.key == pygame.K_u:
+                self._undo_action()
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            self.board.on_mouse_down(event.pos)
+            if self.undo_button.rect.collidepoint(event.pos):
+                self._undo_action()
+                return
+            if not self.is_stuck:
+                self.game_state._push_history()
+                self.board.on_mouse_down(event.pos)
 
         if event.type == pygame.MOUSEMOTION:
             self.board.on_mouse_motion(event.pos)
 
         if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-            self.board.on_mouse_up(event.pos)
+            if not self.is_stuck:
+                moved = self.board.on_mouse_up(event.pos)
+                if moved:
+                    self._refresh_game_flags()
 
     # ------------------------------------------------------------------
     # Ve
@@ -143,8 +167,11 @@ class FreeCellApp:
 
     def _draw_game_hud(self) -> None:
         # Goi y phim tat (goc duoi trai)
-        hint = self.hint_font.render("ESC: Menu   |   R: New Shuffle", True, (255, 250, 205))
+        hint = self.hint_font.render("ESC: Menu   |   R: New Shuffle   |   U: Undo", True, (255, 250, 205))
         self.screen.blit(hint, (18, self.screen.get_height() - hint.get_height() - 14))
+
+        # Nut Undo (scene game)
+        self.undo_button.draw(self.screen, self.hint_font, pygame.mouse.get_pos())
 
         # Man hinh thang
         if self.game_state.is_won():
@@ -155,6 +182,27 @@ class FreeCellApp:
             cx  = self.screen.get_rect().centerx
             cy  = self.screen.get_rect().centery
             self.screen.blit(win, (cx - win.get_width() // 2, cy - win.get_height() // 2))
+        elif self.is_stuck:
+            # Bao thua khi bi ket va khong con nuoc di
+            overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 95))
+            self.screen.blit(overlay, (0, 0))
+            lose = self.title_font.render("NO MOVES LEFT", True, (255, 210, 150))
+            tip = self.hint_font.render("Ban da bi ket. Nhan Undo hoac R de choi lai.", True, (255, 240, 200))
+            cx = self.screen.get_rect().centerx
+            cy = self.screen.get_rect().centery
+            self.screen.blit(lose, (cx - lose.get_width() // 2, cy - lose.get_height() // 2 - 20))
+            self.screen.blit(tip, (cx - tip.get_width() // 2, cy + 30))
+
+    def _undo_action(self) -> None:
+        """Thuc hien undo 1 nuoc, neu co lich su."""
+        if self.game_state.undo():
+            self.board.sync_positions()
+            self._refresh_game_flags()
+
+    def _refresh_game_flags(self) -> None:
+        """Cap nhat trang thai ket/thang sau moi lan state thay doi."""
+        self.is_stuck = (not self.game_state.is_won()) and (not self.game_state.has_any_legal_move())
 
 
 if __name__ == "__main__":

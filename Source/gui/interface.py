@@ -348,10 +348,13 @@ class BoardRenderer:
                 pos[1] - self._drag_offset[1],
             )
 
-    def on_mouse_up(self, pos: Tuple[int, int]) -> None:
-        """Tha bai: kiem tra vi tri drop hop le, neu khong thi huy keo."""
+    def on_mouse_up(self, pos: Tuple[int, int]) -> bool:
+        """Tha bai: kiem tra vi tri drop hop le, neu khong thi huy keo.
+
+        Tra ve True neu vua thuc hien 1 nuoc di hop le.
+        """
         if not self._drag_info:
-            return
+            return False
 
         target  = self.find_drop_target(pos)
         success = self.state.apply_drop(self._drag_info, target) if target else False
@@ -362,6 +365,7 @@ class BoardRenderer:
         self._drag_info    = None
         self._drag_widgets = []
         self._drag_anchor  = None
+        return success
 
     def find_drop_target(self, pos: Tuple[int, int]) -> Optional[TargetRef]:
         """Xac dinh vung bai nao (neu co) chua con tro chuot."""

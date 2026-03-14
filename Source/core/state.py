@@ -78,6 +78,8 @@ class GameState:
         self.foundations: List[List[CardData]]      = [[] for _ in range(4)]
         self.cascades:    List[List[CardData]]      = [[] for _ in range(8)]
         self.move_count:  int                       = 0
+        # Luu lich su de ho tro Undo
+        self._history: List[tuple]                  = []
 
     # ------------------------------------------------------------------
     # Khoi tao / reset
@@ -89,11 +91,35 @@ class GameState:
         self.foundations = [[] for _ in range(4)]
         self.cascades    = [[] for _ in range(8)]
         self.move_count  = 0
+        self._history.clear()
 
         deck = [CardData(rank, suit) for suit in SUITS for rank in RANKS]
         random.shuffle(deck)
         for idx, card in enumerate(deck):
             self.cascades[idx % 8].append(card)
+
+    def _push_history(self) -> None:
+        """Luu snapshot truoc khi ap dung 1 nuoc di hop le."""
+        self._history.append(
+            (
+                list(self.free_cells),
+                [list(pile) for pile in self.foundations],
+                [list(col) for col in self.cascades],
+                self.move_count,
+            )
+        )
+
+    def undo(self) -> bool:
+        """Quay lai trang thai truoc do. Tra ve False neu khong co lich su."""
+        if not self._history:
+            return False
+
+        free_cells, foundations, cascades, move_count = self._history.pop()
+        self.free_cells = list(free_cells)
+        self.foundations = [list(pile) for pile in foundations]
+        self.cascades = [list(col) for col in cascades]
+        self.move_count = move_count
+        return True
 
     # ------------------------------------------------------------------
     # Trang thai thang / thua
@@ -217,6 +243,93 @@ class GameState:
 
         self.move_count += 1
         return True
+
+    def _can_drop_with_source_effect(self, drag: DragInfo, target: TargetRef) -> bool:
+        """Ban mo rong cua can_drop co tinh den trang thai sau khi pick.
+
+        Ham nay dung de check deadlock chinh xac hon cho move nhom.
+        """
+        target_type, idx = target
+        cards = drag.cards
+        src_type, src_idx, src_depth = drag.source
+
+        if target_type == "freecell":
+            return len(cards) == 1 and self.free_cells[idx] is None
+
+        if target_type == "foundation":
+            if len(cards) != 1:
+                return False
+            card = cards[0]
+            return can_place_on_foundation(
+                card.rank, card.suit,
+                FOUNDATION_SUITS[idx], len(self.foundations[idx]),
+            )
+
+        if target_type != "cascade":
+            return False
+
+        if not is_valid_sequence(self._seq_repr(cards)):
+            return False
+
+        empty_free = self._count_empty_free()
+        if src_type == "freecell":
+            empty_free += 1
+
+        empty_cascades = self._count_empty_cascades()
+        if src_type == "cascade" and src_depth == 0 and len(self.cascades[src_idx]) > 0:
+            empty_cascades += 1
+
+        target_is_empty = not self.cascades[idx]
+        max_len = max_movable_cards(empty_free, empty_cascades, target_is_empty)
+        if len(cards) > max_len:
+            return False
+
+        cascade = self.cascades[idx]
+        if not cascade:
+            return True
+
+        return can_place_on(
+            cards[0].rank, cards[0].is_red,
+            cascade[-1].rank, cascade[-1].is_red,
+        )
+
+    def has_any_legal_move(self) -> bool:
+        """Kiem tra con nuoc di hop le nao khong.
+
+        Dung de xac dinh trang thai bi ket (khong con move).
+        """
+        drags: List[DragInfo] = []
+
+        for i, card in enumerate(self.free_cells):
+            if card is not None:
+                drags.append(DragInfo(cards=[card], source=("freecell", i, 0)))
+
+        for col_idx, cascade in enumerate(self.cascades):
+            for start in range(len(cascade)):
+                moving = cascade[start:]
+                if is_valid_sequence(self._seq_repr(moving)):
+                    drags.append(DragInfo(cards=list(moving), source=("cascade", col_idx, start)))
+
+        for drag in drags:
+            src_type, src_idx, _ = drag.source
+
+            for i in range(4):
+                if src_type == "freecell" and src_idx == i:
+                    continue
+                if self._can_drop_with_source_effect(drag, ("freecell", i)):
+                    return True
+
+            for i in range(4):
+                if self._can_drop_with_source_effect(drag, ("foundation", i)):
+                    return True
+
+            for i in range(8):
+                if src_type == "cascade" and src_idx == i:
+                    continue
+                if self._can_drop_with_source_effect(drag, ("cascade", i)):
+                    return True
+
+        return False
 
     # ------------------------------------------------------------------
     # Tien ich cho Solver (su dung sau)
