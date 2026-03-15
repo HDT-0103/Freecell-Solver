@@ -48,6 +48,11 @@ class CardImageLoader:
         """Tra ve duong dan day du den file anh. Ghi de ham nay neu can."""
         return os.path.join(self.base_dir, self.naming_fn(rank, suit))
 
+    def _build_legacy_card_path(self, rank: int, suit: str) -> str:
+        """Ho tro bo ten file cu theo dinh dang rank_of_suit.png."""
+        rank_map = {1: "ace", 11: "jack", 12: "queen", 13: "king"}
+        return os.path.join(self.base_dir, f"{rank_map.get(rank, str(rank))}_of_{suit}.png")
+
     def get_image(self, rank: int, suit: str) -> pygame.Surface:
         key = (rank, suit)
         if key in self._cache:
@@ -59,7 +64,13 @@ class CardImageLoader:
             if self.card_size:
                 img = pygame.transform.smoothscale(img, self.card_size)
         else:
-            img = self._make_fallback(rank, suit)
+            legacy_path = self._build_legacy_card_path(rank, suit)
+            if os.path.exists(legacy_path):
+                img = pygame.image.load(legacy_path).convert_alpha()
+                if self.card_size:
+                    img = pygame.transform.smoothscale(img, self.card_size)
+            else:
+                img = self._make_fallback(rank, suit)
 
         self._cache[key] = img
         return img
@@ -291,6 +302,54 @@ class BoardRenderer:
                 self._widgets[card_data].move_to(
                     bx, by + depth * self.card_overlap_y
                 )
+
+    def apply_state(self, state: GameState) -> None:
+        """Apply a full GameState snapshot to renderer and sync card positions."""
+        self.state.free_cells = list(state.free_cells)
+        self.state.foundations = [list(pile) for pile in state.foundations]
+        self.state.cascades = [list(col) for col in state.cascades]
+        self.state.move_count = state.move_count
+
+        for card_data in self.state.free_cells:
+            if card_data:
+                self._ensure_widget(card_data)
+        for pile in self.state.foundations:
+            for card_data in pile:
+                self._ensure_widget(card_data)
+        for cascade in self.state.cascades:
+            for card_data in cascade:
+                self._ensure_widget(card_data)
+
+        self.sync_positions()
+
+    def get_widget(self, card: CardData) -> Optional[CardWidget]:
+        return self._widgets.get(card)
+
+    def get_card_positions(self, state: GameState) -> Dict[CardData, Tuple[int, int]]:
+        """Return pixel positions for every card in a given snapshot state."""
+        result: Dict[CardData, Tuple[int, int]] = {}
+
+        for i, card_data in enumerate(state.free_cells):
+            if card_data:
+                rect = self.free_cell_rects[i]
+                result[card_data] = (rect.x, rect.y)
+
+        for i, pile in enumerate(state.foundations):
+            rect = self.foundation_rects[i]
+            for card_data in pile:
+                result[card_data] = (rect.x, rect.y)
+
+        for i, cascade in enumerate(state.cascades):
+            bx, by = self.cascade_rects[i].x, self.cascade_rects[i].y
+            for depth, card_data in enumerate(cascade):
+                result[card_data] = (bx, by + depth * self.card_overlap_y)
+
+        return result
+
+    def draw_board(self, surface: pygame.Surface, state: GameState) -> None:
+        """Render a provided GameState snapshot on screen."""
+        self.apply_state(state)
+        self.draw(surface)
 
     # ------------------------------------------------------------------
     # Xu ly su kien chuot (goi tu main.py)
