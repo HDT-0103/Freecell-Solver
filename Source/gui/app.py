@@ -166,7 +166,9 @@ class FreeCellApp:
             self.board.on_mouse_motion(event.pos)
 
         if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-            if not self.ai_solver_mode and not self.is_stuck and not self.animator.status.active:
+            # Always allow releasing a dragged card, even if a temporary "stuck"
+            # flag was raised while the card is in hand.
+            if not self.ai_solver_mode and not self.animator.status.active:
                 moved = self.board.on_mouse_up(event.pos)
                 if moved:
                     self._refresh_game_flags()
