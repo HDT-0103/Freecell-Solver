@@ -51,6 +51,7 @@ class FreeCellApp:
         self.animator = SolverAnimator(step_delay_ms=500)
         self.is_animating = False
         self.ai_solver_mode = False
+        self._ai_total_applied_moves = 0
 
         self._ai_seen_states: set[tuple] = set()
         self._sample_games_by_difficulty = self._discover_sample_games_by_difficulty()
@@ -108,10 +109,15 @@ class FreeCellApp:
                 self.animator.update(self.board)
                 self.is_animating = self.animator.is_animating
                 if was_active and not self.animator.status.active and self.animator.status.finished:
+                    if self.ai_solver_mode:
+                        self._ai_total_applied_moves += self.animator.status.applied_moves
                     # Keep core state in sync with the board after auto-play animation.
                     # Without this, UCS restarts from a stale snapshot and loops forever.
                     self.game.set_state(self.board.state.clone())
                     self.view_model = self.game.get_view_model()
+                    if self.solver_result and self.ai_solver_mode:
+                        # Metrics should show the full auto-play sequence, not only the last UCS stage.
+                        self.solver_result.metrics.solution_steps = self._ai_total_applied_moves
                     if self.animator.status.failed:
                         self.solver_message = "Animation failed due to an invalid transition."
                     elif self.view_model.get("is_goal", False):
@@ -173,6 +179,7 @@ class FreeCellApp:
                 self.animator.clear()
                 self.is_animating = False
                 self.ai_solver_mode = False
+                self._ai_total_applied_moves = 0
                 self._ai_seen_states.clear()
                 self.scene = "menu"
             elif event.key == pygame.K_h and not self.ai_solver_mode and not self.animator.status.active:
@@ -202,6 +209,7 @@ class FreeCellApp:
         self.animator.clear()
         self.is_animating = False
         self.ai_solver_mode = False
+        self._ai_total_applied_moves = 0
         self._ai_seen_states.clear()
         self.solver_result = None
         self.solver_message = ""
@@ -275,6 +283,7 @@ class FreeCellApp:
         self.animator.clear()
         self.is_animating = False
         self.ai_solver_mode = True
+        self._ai_total_applied_moves = 0
         self.solver_result = None
         self._solver_async_result = None
         self._solver_async_error = None
@@ -398,9 +407,11 @@ class FreeCellApp:
         if result.solved:
             self._solver_stage_idx = 0
             name = self.last_loaded_sample or "random shuffle"
+            total_steps = self._ai_total_applied_moves + result.metrics.solution_steps
+            result.metrics.solution_steps = total_steps
             self.solver_message = (
                 f"AI Solver: {name} - "
-                f"{result.metrics.solution_steps} steps, "
+                f"{total_steps} steps, "
                 f"{result.metrics.elapsed_seconds:.2f}s"
             )
             self.animator.animate_solution(result.state_path)
