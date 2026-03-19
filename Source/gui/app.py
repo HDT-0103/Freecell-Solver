@@ -9,10 +9,10 @@ from typing import Dict, List
 import pygame
 
 from config import CARD_IMAGE_DIR, SOLUTION_DIR
-from core import FreeCellGame
+from core import FreeCellGame, rules
 from core.adapter import state_to_gamestate, gamestate_to_state
 from core.loader import load_game_from_json
-from core.state import GameState
+from core.state import State
 from gui.animation import SolverAnimator
 from gui.hud import draw_solver_stats, draw_win_or_lose_overlay
 from gui.interface import BoardRenderer, CardImageLoader
@@ -46,9 +46,7 @@ class FreeCellApp:
         loader = CardImageLoader(base_dir=CARD_IMAGE_DIR, card_size=(110, 154))
         self.game = FreeCellGame(seed=1)
         self.view_model = self.game.get_view_model()
-        # Keep a GameState wrapper for the renderer (it will read from view_model)
-        self.game_state = state_to_gamestate(self.game.get_state())
-        self.board = BoardRenderer(self.screen.get_rect(), loader, self.game_state, self.game, self.view_model)
+        self.board = BoardRenderer(self.screen.get_rect(), loader, self.game.get_state(), self.game, self.view_model)
         self.is_stuck = False
 
         self.animator = SolverAnimator(step_delay_ms=500)
@@ -111,6 +109,10 @@ class FreeCellApp:
                 self.animator.update(self.board)
                 self.is_animating = self.animator.is_animating
                 if was_active and not self.animator.status.active and self.animator.status.finished:
+                    # Keep core state in sync with the board after auto-play animation.
+                    # Without this, UCS restarts from a stale snapshot and loops forever.
+                    self.game.set_state(self.board.state.clone())
+                    self.view_model = self.game.get_view_model()
                     if self.animator.status.failed:
                         self.solver_message = "Animation failed due to an invalid transition."
                     elif self.view_model.get("is_goal", False):
@@ -357,9 +359,8 @@ class FreeCellApp:
         self._hint_async_error = None
 
     def _update_game_from_state(self) -> None:
-        """Update game_state wrapper from FreeCellGame state."""
-        self.game_state = state_to_gamestate(self.game.get_state())
-        self.board.update_state(self.game_state)
+        """Update renderer state from FreeCellGame state."""
+        self.board.update_state(self.game.get_state())
 
     def _poll_hint_result(self) -> None:
         if not self._hint_pending:
@@ -400,19 +401,21 @@ class FreeCellApp:
         if result.solved:
             self._solver_stage_idx = 0
             name = self.last_loaded_sample or "random shuffle"
+            state_path = [gamestate_to_state(s) for s in result.state_path]
             self.solver_message = (
                 f"AI Solver: {name} - "
                 f"{result.metrics.solution_steps} steps, "
                 f"{result.metrics.elapsed_seconds:.2f}s"
             )
-            self.animator.animate_solution(result.state_path)
+            self.animator.animate_solution(state_path)
             self.is_animating = True
             return
 
         self._solver_stage_idx = min(self._solver_stage_idx + 1, len(self._solver_stages) - 1)
         if len(result.state_path) > 1:
             self._solver_stage_idx = 0
-            self.animator.animate_solution(result.state_path)
+            state_path = [gamestate_to_state(s) for s in result.state_path]
+            self.animator.animate_solution(state_path)
             self.is_animating = True
             self.solver_message = f"AI Solver: advanced {len(result.state_path) - 1} moves - continuing..."
             return
@@ -501,7 +504,7 @@ class FreeCellApp:
 
         self.animator.animate_solution(path)
         self.is_animating = True
-        self._ai_seen_states.add(path[-1].to_hashable())
+        self._ai_seen_states.add(path[-1].as_key())
         return True
 
     def _clear_hint(self) -> None:
@@ -537,65 +540,37 @@ class FreeCellApp:
             f"to {self._format_location(hint.target)}."
         )
 
-    def _build_immediate_step_path(self) -> List[GameState] | None:
-        cur = self.game_state.clone()
-        preferred_next: GameState | None = None
-        fallback_next: GameState | None = None
+    def _build_immediate_step_path(self) -> List[State] | None:
+        cur = self.game.get_state()
+        preferred_next: State | None = None
+        fallback_next: State | None = None
 
-        def try_move(source, target) -> GameState | None:
-            nxt = cur.clone()
-            drag = nxt.pick_cards(source)
-            if drag is None:
-                return None
-            if nxt.apply_drop(drag, target):
-                return nxt
-            nxt.cancel_drag(drag)
-            return None
+        legal_moves = rules.enumerate_legal_moves(cur)
 
-        def consider(nxt: GameState) -> bool:
+        def move_matches_priority(move: rules.Move, priority: int) -> bool:
+            if priority == 0:
+                return move.src_type == rules.LOCATION_FREE_CELL and move.dst_type == rules.LOCATION_FOUNDATION
+            if priority == 1:
+                return move.src_type == rules.LOCATION_CASCADE and move.dst_type == rules.LOCATION_FOUNDATION
+            if priority == 2:
+                return move.src_type == rules.LOCATION_CASCADE and move.dst_type == rules.LOCATION_FREE_CELL
+            return move.src_type == rules.LOCATION_CASCADE and move.dst_type == rules.LOCATION_CASCADE
+
+        def consider(nxt: State) -> bool:
             nonlocal preferred_next, fallback_next
             if fallback_next is None:
                 fallback_next = nxt
-            if nxt.to_hashable() not in self._ai_seen_states:
+            if nxt.as_key() not in self._ai_seen_states:
                 preferred_next = nxt
                 return True
             return False
 
-        for fc_idx, card in enumerate(cur.free_cells):
-            if card is None:
-                continue
-            for f_idx in range(4):
-                nxt = try_move(("freecell", fc_idx, 0), ("foundation", f_idx))
-                if nxt is not None and consider(nxt):
-                    return [cur, preferred_next]
-
-        for c_idx, cascade in enumerate(cur.cascades):
-            if not cascade:
-                continue
-            src = ("cascade", c_idx, len(cascade) - 1)
-            for f_idx in range(4):
-                nxt = try_move(src, ("foundation", f_idx))
-                if nxt is not None and consider(nxt):
-                    return [cur, preferred_next]
-
-        for c_idx, cascade in enumerate(cur.cascades):
-            if not cascade:
-                continue
-            src = ("cascade", c_idx, len(cascade) - 1)
-            for fc_idx in range(4):
-                nxt = try_move(src, ("freecell", fc_idx))
-                if nxt is not None and consider(nxt):
-                    return [cur, preferred_next]
-
-        for c_idx, cascade in enumerate(cur.cascades):
-            if not cascade:
-                continue
-            src = ("cascade", c_idx, len(cascade) - 1)
-            for dst in range(8):
-                if dst == c_idx:
+        for priority in range(4):
+            for move in legal_moves:
+                if not move_matches_priority(move, priority):
                     continue
-                nxt = try_move(src, ("cascade", dst))
-                if nxt is not None and consider(nxt):
+                nxt = rules.apply_move(cur, move)
+                if consider(nxt):
                     return [cur, preferred_next]
 
         if preferred_next is not None:
@@ -649,7 +624,7 @@ class FreeCellApp:
             self.screen,
             self.title_font,
             self.hint_font,
-            self.game_state,
+            is_won,
             self.is_stuck,
         )
 

@@ -15,7 +15,17 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKIN
 
 import pygame
 
-from core.state import CardData, DragInfo, GameState, SourceRef, TargetRef
+from core import rules
+from core.state import Card, State
+
+SourceRef = tuple[str, int, int]
+TargetRef = tuple[str, int]
+
+
+@dataclass(frozen=True)
+class DragInfo:
+    cards: list[Card]
+    source: SourceRef
 
 if TYPE_CHECKING:
     from core import FreeCellGame
@@ -97,12 +107,12 @@ class CardImageLoader:
 # ---------------------------------------------------------------------------
 
 class CardWidget(pygame.sprite.Sprite):
-    """Hien thi mot la bai: luu image va rect, tham chieu nguoc lai CardData."""
+    """Hien thi mot la bai: luu image va rect, tham chieu nguoc lai Card."""
 
-    def __init__(self, data: CardData, loader: CardImageLoader) -> None:
+    def __init__(self, data: Card, loader: CardImageLoader) -> None:
         super().__init__()
         self.data  = data
-        self.image = loader.get_image(data.rank, data.suit)
+        self.image = loader.get_image(data.rank, _suit_short_to_long(data.suit))
         self.rect  = self.image.get_rect()
 
     def move_to(self, x: int, y: int) -> None:
@@ -159,7 +169,7 @@ class BoardRenderer:
         self,
         screen_rect:  pygame.Rect,
         image_loader: CardImageLoader,
-        game_state:   GameState,
+        game_state:   State,
         game: Optional[FreeCellGame] = None,
         view_model: Optional[Dict] = None,
     ) -> None:
@@ -196,14 +206,14 @@ class BoardRenderer:
         self._rebuild_static_surface()
 
         # Map CardData -> CardWidget, duoc tao lai sau moi reset()
-        self._widgets: Dict[CardData, CardWidget] = {}
+        self._widgets: Dict[Card, CardWidget] = {}
 
         # Drag state noi bo
         self._drag_info:    Optional[DragInfo]        = None
         self._drag_widgets: List[CardWidget]           = []
         self._drag_offset:  Tuple[int, int]            = (0, 0)
         self._drag_anchor:  Optional[Tuple[int, int]]  = None
-        self._highlighted_card: Optional[CardData]     = None
+        self._highlighted_card: Optional[tuple[int, str]] = None
 
     # ------------------------------------------------------------------
     # Xay dung layout va surface tinh
@@ -282,7 +292,7 @@ class BoardRenderer:
 
         self.sync_positions()
 
-    def _ensure_widget(self, data: CardData) -> CardWidget:
+    def _ensure_widget(self, data: Card) -> CardWidget:
         if data not in self._widgets:
             self._widgets[data] = CardWidget(data, self.loader)
         return self._widgets[data]
@@ -296,11 +306,13 @@ class BoardRenderer:
                     self.free_cell_rects[i].y,
                 )
 
-        for i, pile in enumerate(self.state.foundations):
-            for card_data in pile:
-                self._widgets[card_data].move_to(
-                    self.foundation_rects[i].x,
-                    self.foundation_rects[i].y,
+        for suit_idx, suit in enumerate(("C", "D", "H", "S")):
+            top_rank = self.state.foundations[suit]
+            if top_rank > 0:
+                top_card = Card(rank=top_rank, suit=suit)
+                self._ensure_widget(top_card).move_to(
+                    self.foundation_rects[suit_idx].x,
+                    self.foundation_rects[suit_idx].y,
                 )
 
         for i, cascade in enumerate(self.state.cascades):
@@ -311,61 +323,58 @@ class BoardRenderer:
                     bx, by + depth * self.card_overlap_y
                 )
 
-    def apply_state(self, state: GameState) -> None:
-        """Apply a full GameState snapshot to renderer and sync card positions."""
-        self.state.free_cells = list(state.free_cells)
-        self.state.foundations = [list(pile) for pile in state.foundations]
-        self.state.cascades = [list(col) for col in state.cascades]
-        self.state.move_count = state.move_count
+    def apply_state(self, state: State) -> None:
+        """Apply a full State snapshot to renderer and sync card positions."""
+        self.state = state.clone()
 
         for card_data in self.state.free_cells:
             if card_data:
                 self._ensure_widget(card_data)
-        for pile in self.state.foundations:
-            for card_data in pile:
-                self._ensure_widget(card_data)
+        for suit in ("C", "D", "H", "S"):
+            for rank in range(1, self.state.foundations[suit] + 1):
+                self._ensure_widget(Card(rank=rank, suit=suit))
         for cascade in self.state.cascades:
             for card_data in cascade:
                 self._ensure_widget(card_data)
 
         self.sync_positions()
 
-    def get_widget(self, card: CardData) -> Optional[CardWidget]:
+    def get_widget(self, card: Card) -> Optional[CardWidget]:
         return self._widgets.get(card)
 
-    def set_highlighted_card(self, card: Optional[CardData]) -> None:
-        self._highlighted_card = card
+    def set_highlighted_card(self, card) -> None:
+        self._highlighted_card = _normalize_card_identity(card)
 
-    def update_state(self, state: GameState) -> None:
-        """Update the internal state to a new GameState."""
-        self.state = state
+    def update_state(self, state: State) -> None:
+        """Update the internal state to a new State."""
+        self.state = state.clone()
         
         # Ensure all widgets exist for new state before syncing positions
         for card_data in self.state.free_cells:
             if card_data:
                 self._ensure_widget(card_data)
-        for pile in self.state.foundations:
-            for card_data in pile:
-                self._ensure_widget(card_data)
+        for suit in ("C", "D", "H", "S"):
+            for rank in range(1, self.state.foundations[suit] + 1):
+                self._ensure_widget(Card(rank=rank, suit=suit))
         for cascade in self.state.cascades:
             for card_data in cascade:
                 self._ensure_widget(card_data)
                 
         self.sync_positions()
 
-    def get_card_positions(self, state: GameState) -> Dict[CardData, Tuple[int, int]]:
+    def get_card_positions(self, state: State) -> Dict[Card, Tuple[int, int]]:
         """Return pixel positions for every card in a given snapshot state."""
-        result: Dict[CardData, Tuple[int, int]] = {}
+        result: Dict[Card, Tuple[int, int]] = {}
 
         for i, card_data in enumerate(state.free_cells):
             if card_data:
                 rect = self.free_cell_rects[i]
                 result[card_data] = (rect.x, rect.y)
 
-        for i, pile in enumerate(state.foundations):
-            rect = self.foundation_rects[i]
-            for card_data in pile:
-                result[card_data] = (rect.x, rect.y)
+        for suit_idx, suit in enumerate(("C", "D", "H", "S")):
+            rect = self.foundation_rects[suit_idx]
+            for rank in range(1, state.foundations[suit] + 1):
+                result[Card(rank=rank, suit=suit)] = (rect.x, rect.y)
 
         for i, cascade in enumerate(state.cascades):
             bx, by = self.cascade_rects[i].x, self.cascade_rects[i].y
@@ -374,8 +383,8 @@ class BoardRenderer:
 
         return result
 
-    def draw_board(self, surface: pygame.Surface, state: GameState) -> None:
-        """Render a provided GameState snapshot on screen."""
+    def draw_board(self, surface: pygame.Surface, state: State) -> None:
+        """Render a provided State snapshot on screen."""
         self.apply_state(state)
         self.draw(surface)
 
@@ -394,18 +403,7 @@ class BoardRenderer:
             if card_data:
                 w = self._widgets[card_data]
                 if w.rect.collidepoint(pos):
-                    drag = self.state.pick_cards(("freecell", idx, 0))
-                    if drag:
-                        self._start_drag(drag, w, pos)
-                        return True
-
-        # Kiem tra Foundation top card
-        for idx, pile in enumerate(self.state.foundations):
-            if pile:
-                card_data = pile[-1]
-                w = self._widgets[card_data]
-                if w.rect.collidepoint(pos):
-                    drag = self.state.pick_cards(("foundation", idx, len(pile) - 1))
+                    drag = self._pick_cards(("freecell", idx, 0))
                     if drag:
                         self._start_drag(drag, w, pos)
                         return True
@@ -415,7 +413,7 @@ class BoardRenderer:
             for start in range(len(cascade) - 1, -1, -1):
                 w = self._widgets[cascade[start]]
                 if w.rect.collidepoint(pos):
-                    drag = self.state.pick_cards(("cascade", col_idx, start))
+                    drag = self._pick_cards(("cascade", col_idx, start))
                     if drag:
                         self._start_drag(drag, w, pos)
                         return True
@@ -456,46 +454,31 @@ class BoardRenderer:
 
         target  = self.find_drop_target(pos)
         success = False
-        
+
         if target and self.game:
             # Translate GUI location names to core move names before submitting.
             src_type, src_idx, src_start = self._drag_info.source
             dst_type, dst_idx = target
-            can_use_core_api = src_type in ("cascade", "freecell")
+            src_type_core = "free_cell" if src_type == "freecell" else src_type
+            dst_type_core = "free_cell" if dst_type == "freecell" else dst_type
+            if dst_type == "foundation":
+                dst_idx_core = ["C", "D", "H", "S"][dst_idx]
+            else:
+                dst_idx_core = dst_idx
 
-            if can_use_core_api:
-                src_type_core = "free_cell" if src_type == "freecell" else src_type
-                dst_type_core = "free_cell" if dst_type == "freecell" else dst_type
-                if dst_type == "foundation":
-                    dst_idx_core = ["C", "D", "H", "S"][dst_idx]
-                else:
-                    dst_idx_core = dst_idx
+            count = len(self._drag_info.cards)
+            if src_type == "freecell":
+                count = 1
 
-                count = len(self._drag_info.cards)
-                if src_type == "freecell":
-                    count = 1
+            result = self.game.try_move(src_type_core, src_idx, dst_type_core, dst_idx_core, count=count)
+            success = result.ok
 
-                result = self.game.try_move(src_type_core, src_idx, dst_type_core, dst_idx_core, count=count)
-                success = result.ok
-
-                if success:
-                    # Update the GameState wrapper from authoritative core state.
-                    from core.adapter import state_to_gamestate
-                    self.state = state_to_gamestate(result.state)
-
-            if not success:
-                # Fallback supports moves that only the legacy GUI state allows
-                # (for example, dragging back from foundations).
-                success = self.state.apply_drop(self._drag_info, target)
-                if success:
-                    from core.adapter import gamestate_to_state
-                    self.game.set_state(gamestate_to_state(self.state))
-        else:
-            # Fallback to old GameState API for backward compatibility
-            success = self.state.apply_drop(self._drag_info, target) if target else False
+            if success:
+                # Update the GameState wrapper from authoritative core state.
+                self.state = result.state.clone()
         
         if not success and self._drag_info:
-            self.state.cancel_drag(self._drag_info)
+            self._cancel_drag(self._drag_info)
 
         self.sync_positions()
         self._drag_info    = None
@@ -535,9 +518,11 @@ class BoardRenderer:
                     surface.blit(w.image, w.rect)
 
         # Ve la tren cung cua moi Foundation
-        for pile in self.state.foundations:
-            if pile:
-                w = self._widgets[pile[-1]]
+        for suit_idx, suit in enumerate(("C", "D", "H", "S")):
+            top_rank = self.state.foundations[suit]
+            if top_rank > 0:
+                top_card = Card(rank=top_rank, suit=suit)
+                w = self._widgets[top_card]
                 if id(w) not in dragging_ids:
                     surface.blit(w.image, w.rect)
 
@@ -556,17 +541,79 @@ class BoardRenderer:
                 surface.blit(w.image, w.rect)
 
         if self._highlighted_card is not None:
-            widget = self._widgets.get(self._highlighted_card)
+            widget = self._get_widget_by_identity(self._highlighted_card)
             if widget is not None:
                 highlight_rect = widget.rect.inflate(10, 10)
                 pygame.draw.rect(surface, (255, 223, 64), highlight_rect, width=4, border_radius=12)
 
         # Hien thi so nuoc da di (goc duoi phai)
-        info = self.font_info.render(
-            f"Moves: {self.state.move_count}", True, (255, 250, 190)
-        )
+        info = self.font_info.render(f"Moves: {getattr(self.state, 'g', 0)}", True, (255, 250, 190))
         surface.blit(
             info,
             (self.screen_rect.width  - info.get_width()  - 18,
              self.screen_rect.height - info.get_height() - 14),
         )
+
+    def _pick_cards(self, source: SourceRef) -> Optional[DragInfo]:
+        location, index, start = source
+        if location == "freecell":
+            if not (0 <= index < 4) or start != 0:
+                return None
+            card = self.state.free_cells[index]
+            if card is None:
+                return None
+            self.state.free_cells[index] = None
+            return DragInfo(cards=[card], source=source)
+
+        if location != "cascade" or not (0 <= index < len(self.state.cascades)):
+            return None
+
+        cascade = self.state.cascades[index]
+        if not (0 <= start < len(cascade)):
+            return None
+
+        cards = cascade[start:]
+        if not rules.is_valid_sequence(cards):
+            return None
+
+        max_movable = rules.get_max_move_size(self.state)
+        if len(cards) > max_movable:
+            return None
+
+        self.state.cascades[index] = cascade[:start]
+        return DragInfo(cards=cards, source=source)
+
+    def _cancel_drag(self, drag: DragInfo) -> None:
+        location, index, start = drag.source
+        if location == "freecell":
+            self.state.free_cells[index] = drag.cards[0]
+            return
+
+        cascade = self.state.cascades[index]
+        self.state.cascades[index] = cascade[:start] + list(drag.cards) + cascade[start:]
+
+    def _get_widget_by_identity(self, identity: tuple[int, str]) -> Optional[CardWidget]:
+        for card, widget in self._widgets.items():
+            if card.rank == identity[0] and card.suit == identity[1]:
+                return widget
+        return None
+
+
+def _suit_short_to_long(suit: str) -> str:
+    return {"H": "hearts", "D": "diamonds", "C": "clubs", "S": "spades"}[suit]
+
+
+def _normalize_card_identity(card) -> Optional[tuple[int, str]]:
+    if card is None:
+        return None
+
+    suit = getattr(card, "suit", None)
+    rank = getattr(card, "rank", None)
+    if suit is None or rank is None:
+        return None
+
+    if suit in ("H", "D", "C", "S"):
+        return (rank, suit)
+
+    long_to_short = {"hearts": "H", "diamonds": "D", "clubs": "C", "spades": "S"}
+    return (rank, long_to_short.get(suit, suit))

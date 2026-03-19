@@ -1,46 +1,12 @@
 from __future__ import annotations
 
 import json
-from typing import Callable, List, TYPE_CHECKING
+from typing import List, TYPE_CHECKING
 
-from core.state import Card, State, CardData, GameState
+from core.state import Card, State
 
 if TYPE_CHECKING:
     from core.game_service import FreeCellGame
-
-
-def parse_card_token(token: str) -> CardData:
-    token = token.strip().upper()
-    if len(token) < 2:
-        raise ValueError(f"Invalid card token: {token}")
-
-    rank_part = token[:-1]
-    suit_part = token[-1]
-
-    rank_map = {
-        "A": 1,
-        "T": 10,
-        "J": 11,
-        "Q": 12,
-        "K": 13,
-    }
-    if rank_part in rank_map:
-        rank = rank_map[rank_part]
-    else:
-        rank = int(rank_part)
-        if rank < 2 or rank > 9:
-            raise ValueError(f"Invalid rank in token: {token}")
-
-    suit_map = {
-        "C": "clubs",
-        "D": "diamonds",
-        "H": "hearts",
-        "S": "spades",
-    }
-    if suit_part not in suit_map:
-        raise ValueError(f"Invalid suit in token: {token}")
-
-    return CardData(rank=rank, suit=suit_map[suit_part])
 
 
 def parse_card_token_new(token: str) -> Card:
