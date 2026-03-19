@@ -5,18 +5,27 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from core.state import DragInfo, GameState, SourceRef, TargetRef
+from core.state import CardData, DragInfo, GameState, SourceRef, TargetRef
 from core.rules import FOUNDATION_SUITS
 from utils.metrics import SearchMetrics, measure_search
 
 
-Move = Tuple[SourceRef, TargetRef]
+SearchMove = Tuple[SourceRef, TargetRef]
+
+
+@dataclass(frozen=True)
+class Move:
+	card: CardData
+	source: SourceRef
+	target: TargetRef
+	depth: int
+	score: int
 
 
 @dataclass
 class UCSSearchResult:
 	solved: bool
-	moves: List[Move]
+	moves: List[SearchMove]
 	state_path: List[GameState]
 	metrics: SearchMetrics
 
@@ -32,18 +41,32 @@ def _try_apply_move(state: GameState, source: SourceRef, target: TargetRef) -> O
 	return None
 
 
-def _generate_single_card_moves(state: GameState) -> List[Tuple[Move, GameState]]:
+def _iter_single_card_sources(state: GameState) -> List[Tuple[SourceRef, CardData]]:
+	sources: List[Tuple[SourceRef, CardData]] = []
+
+	for src_idx, card in enumerate(state.free_cells):
+		if card is not None:
+			sources.append((("freecell", src_idx, 0), card))
+
+	for src_idx, cascade in enumerate(state.cascades):
+		if cascade:
+			sources.append((("cascade", src_idx, len(cascade) - 1), cascade[-1]))
+
+	return sources
+
+
+def _generate_single_card_moves(
+	state: GameState,
+	*,
+	include_foundation_backmoves: bool = False,
+) -> List[Tuple[SearchMove, GameState]]:
 	"""Generate legal successors with single-card moves.
 
 	Single-card branching keeps UCS practical for an interactive GUI demo.
 	"""
-	successors: List[Tuple[Move, GameState]] = []
+	successors: List[Tuple[SearchMove, GameState]] = []
 
-	# Moves from free cells.
-	for src_idx, card in enumerate(state.free_cells):
-		if card is None:
-			continue
-		source: SourceRef = ("freecell", src_idx, 0)
+	for source, card in _iter_single_card_sources(state):
 		drag = DragInfo(cards=[card], source=source)
 
 		for f_idx in range(4):
@@ -53,6 +76,14 @@ def _generate_single_card_moves(state: GameState) -> List[Tuple[Move, GameState]
 				if nxt is not None:
 					successors.append(((source, target), nxt))
 
+		if source[0] != "freecell":
+			for fc_idx in range(4):
+				target = ("freecell", fc_idx)
+				if state.can_drop(drag, target):
+					nxt = _try_apply_move(state, source, target)
+					if nxt is not None:
+						successors.append(((source, target), nxt))
+
 		for c_idx in range(8):
 			target = ("cascade", c_idx)
 			if state.can_drop(drag, target):
@@ -60,44 +91,27 @@ def _generate_single_card_moves(state: GameState) -> List[Tuple[Move, GameState]
 				if nxt is not None:
 					successors.append(((source, target), nxt))
 
-	# Moves from cascade tops.
-	for src_idx, cascade in enumerate(state.cascades):
-		if not cascade:
-			continue
-		source: SourceRef = ("cascade", src_idx, len(cascade) - 1)
-		drag = DragInfo(cards=[cascade[-1]], source=source)
-
-		for fc_idx in range(4):
-			target = ("freecell", fc_idx)
-			if state.can_drop(drag, target):
-				nxt = _try_apply_move(state, source, target)
-				if nxt is not None:
-					successors.append(((source, target), nxt))
-
-		for f_idx in range(4):
-			target = ("foundation", f_idx)
-			if state.can_drop(drag, target):
-				nxt = _try_apply_move(state, source, target)
-				if nxt is not None:
-					successors.append(((source, target), nxt))
-
-		for c_idx in range(8):
-			if c_idx == src_idx:
+	if include_foundation_backmoves:
+		for foundation_idx, pile in enumerate(state.foundations):
+			if not pile:
 				continue
-			target = ("cascade", c_idx)
-			if state.can_drop(drag, target):
-				nxt = _try_apply_move(state, source, target)
-				if nxt is not None:
-					successors.append(((source, target), nxt))
+			card = pile[-1]
+			if card.rank > 3:
+				continue
+			source: SourceRef = ("foundation", foundation_idx, len(pile) - 1)
+			drag = DragInfo(cards=[card], source=source)
+			for cascade_idx in range(8):
+				target = ("cascade", cascade_idx)
+				if state.can_drop(drag, target):
+					nxt = _try_apply_move(state, source, target)
+					if nxt is not None:
+						successors.append(((source, target), nxt))
 
-	# Multi-card supermoves: cascade -> cascade.
-	# To control branching, for each (src, dst) we only try the longest legal group.
 	for src_idx, cascade in enumerate(state.cascades):
 		n = len(cascade)
 		if n < 2:
 			continue
 
-		# Compute longest valid alternating-descending tail length.
 		max_tail = 1
 		for pos in range(n - 2, -1, -1):
 			if cascade[pos + 1].can_stack_on(cascade[pos]):
@@ -134,23 +148,57 @@ def _generate_single_card_moves(state: GameState) -> List[Tuple[Move, GameState]
 	return successors
 
 
+def _count_foundation_cards(state: GameState) -> int:
+	return sum(len(pile) for pile in state.foundations)
+
+
+def _low_rank_blocker_penalty(state: GameState) -> int:
+	penalty = 0
+	attachable_low_cards = 0
+
+	for cascade in state.cascades:
+		for idx, card in enumerate(cascade):
+			if card.rank not in (1, 2):
+				continue
+			blockers = len(cascade) - 1 - idx
+			if blockers > 0:
+				weight = 18 if card.rank == 1 else 12
+				penalty += blockers * weight
+			else:
+				attachable_low_cards += 1
+
+	for card in state.free_cells:
+		if card is not None and card.rank in (1, 2):
+			attachable_low_cards += 1
+
+	return penalty - (attachable_low_cards * 8)
+
+
+def _hint_score(state: GameState) -> int:
+	foundation_cards = _count_foundation_cards(state)
+	empty_free_cells = sum(1 for card in state.free_cells if card is None)
+	empty_tableau = sum(1 for cascade in state.cascades if not cascade)
+	blocked_low_penalty = _low_rank_blocker_penalty(state)
+
+	return (
+		foundation_cards * 120
+		+ empty_free_cells * 18
+		+ empty_tableau * 28
+		- blocked_low_penalty
+	)
+
+
 def _progress_score(state: GameState) -> Tuple[int, int, int]:
 	"""Higher tuple means better intermediate progress for partial replay."""
-	foundation_cards = sum(len(pile) for pile in state.foundations)
+	foundation_cards = _count_foundation_cards(state)
 	empty_free = sum(1 for c in state.free_cells if c is None)
 	empty_cascades = sum(1 for c in state.cascades if len(c) == 0)
-	# Prefer states that improve foundation first, then reduce search heuristic.
 	return (foundation_cards, -_heuristic(state), empty_free + empty_cascades)
 
 
 def _heuristic(state: GameState) -> int:
-	"""Heuristic cost used for practical UCS guidance on FreeCell.
-
-	Base term: cards not yet on foundation.
-	Guidance term: blockers above the next required rank of each suit.
-	This is intentionally aggressive (not strictly admissible) to avoid stalls.
-	"""
-	foundation_cards = sum(len(pile) for pile in state.foundations)
+	"""Heuristic cost used for practical UCS guidance on FreeCell."""
+	foundation_cards = _count_foundation_cards(state)
 	remaining = 52 - foundation_cards
 	if remaining == 0:
 		return 0
@@ -190,9 +238,9 @@ def _heuristic(state: GameState) -> int:
 def _reconstruct_path(
 	key: tuple,
 	parent: Dict[tuple, Optional[tuple]],
-	move_from_parent: Dict[tuple, Move],
-) -> List[Move]:
-	path: List[Move] = []
+	move_from_parent: Dict[tuple, SearchMove],
+) -> List[SearchMove]:
+	path: List[SearchMove] = []
 	cursor = key
 	while parent[cursor] is not None:
 		path.append(move_from_parent[cursor])
@@ -201,31 +249,137 @@ def _reconstruct_path(
 	return path
 
 
+def _build_state_path(start_state: GameState, moves_seq: List[SearchMove]) -> List[GameState]:
+	path: List[GameState] = [start_state.clone()]
+	cursor = start_state.clone()
+	for source, target in moves_seq:
+		drag = cursor.pick_cards(source)
+		if drag is None:
+			break
+		if not cursor.apply_drop(drag, target):
+			cursor.cancel_drag(drag)
+			break
+		path.append(cursor.clone())
+	return path
+
+
+def _card_from_source(state: GameState, source: SourceRef) -> Optional[CardData]:
+	location, index, start = source
+	if location == "freecell":
+		return state.free_cells[index]
+	if location == "foundation":
+		pile = state.foundations[index]
+		return pile[-1] if pile else None
+	cascade = state.cascades[index]
+	if not (0 <= start < len(cascade)):
+		return None
+	return cascade[start]
+
+
+def get_hint(
+	initial_state: GameState,
+	*,
+	max_depth: int = 6,
+	max_nodes: int = 25_000,
+	max_time_seconds: float = 0.35,
+	allow_foundation_backmoves: bool = True,
+) -> Optional[Move]:
+	"""Return the strongest bounded-UCS move from the current state for real-time hinting."""
+	start = initial_state.clone()
+	start_key = start.to_hashable()
+	start_score = _hint_score(start)
+	begin = time.perf_counter()
+
+	frontier: List[Tuple[int, int, int, GameState]] = []
+	tie_breaker = 0
+	heapq.heappush(frontier, (0, -start_score, tie_breaker, start))
+
+	visited: Dict[tuple, Tuple[int, int]] = {start_key: (0, start_score)}
+	parent: Dict[tuple, Optional[tuple]] = {start_key: None}
+	move_from_parent: Dict[tuple, SearchMove] = {}
+
+	best_key = start_key
+	best_rank = (-10**9, -10**9, -10**9)
+	expanded_nodes = 0
+
+	while frontier and expanded_nodes < max_nodes:
+		if (time.perf_counter() - begin) >= max_time_seconds:
+			break
+		depth, _, _, state = heapq.heappop(frontier)
+		state_key = state.to_hashable()
+		current_depth, current_score = visited[state_key]
+		if depth != current_depth:
+			continue
+
+		if depth > 0:
+			rank = (
+				current_score,
+				_count_foundation_cards(state),
+				-depth,
+			)
+			if rank > best_rank:
+				best_rank = rank
+				best_key = state_key
+
+		if state.is_won():
+			best_key = state_key
+			break
+
+		if depth >= max_depth:
+			continue
+
+		expanded_nodes += 1
+		for move, next_state in _generate_single_card_moves(
+			state,
+			include_foundation_backmoves=allow_foundation_backmoves,
+		):
+			next_key = next_state.to_hashable()
+			next_depth = depth + 1
+			next_score = _hint_score(next_state)
+			seen = visited.get(next_key)
+			if seen is not None and next_depth > seen[0]:
+				continue
+			if seen is not None and next_depth == seen[0] and next_score <= seen[1]:
+				continue
+
+			visited[next_key] = (next_depth, next_score)
+			parent[next_key] = state_key
+			move_from_parent[next_key] = move
+			tie_breaker += 1
+			heapq.heappush(frontier, (next_depth, -next_score, tie_breaker, next_state))
+
+	path = _reconstruct_path(best_key, parent, move_from_parent)
+	if not path:
+		return None
+
+	first_move = path[0]
+	card = _card_from_source(initial_state, first_move[0])
+	if card is None:
+		return None
+
+	best_depth, best_score = visited.get(best_key, (len(path), start_score))
+	return Move(card=card, source=first_move[0], target=first_move[1], depth=best_depth, score=best_score)
+
+
 def solve_ucs(
 	initial_state: GameState,
 	max_nodes: int = 500_000,
 	max_time_seconds: float = 30.0,
 ) -> UCSSearchResult:
-	"""Run UCS with admissible heuristic (h = cards not on foundation).
+	"""Run UCS with admissible heuristic (h = cards not on foundation)."""
 
-	f = g + h with admissible h makes this equivalent to A*, guaranteeing
-	an optimal solution while keeping the UCS cost framework.
-	"""
-
-	def _search() -> Tuple[bool, List[Move], int]:
+	def _search() -> Tuple[bool, List[SearchMove], int]:
 		start = initial_state.clone()
 		start_key = start.to_hashable()
 		h0 = _heuristic(start)
 
-		# heap entries: (f_cost, g_cost, tie_breaker, state)
 		frontier: List[Tuple[int, int, int, GameState]] = []
 		tie_breaker = 0
 		heapq.heappush(frontier, (h0, 0, tie_breaker, start))
 
-		# best known g-cost per state (duplicate detection)
 		best_g: Dict[tuple, int] = {start_key: 0}
 		parent: Dict[tuple, Optional[tuple]] = {start_key: None}
-		move_from_parent: Dict[tuple, Move] = {}
+		move_from_parent: Dict[tuple, SearchMove] = {}
 
 		best_progress_key = start_key
 		best_progress_score = _progress_score(start)
@@ -242,7 +396,6 @@ def solve_ucs(
 			f_cost, g_cost, _, state = heapq.heappop(frontier)
 			key = state.to_hashable()
 
-			# Stale entry: a cheaper path was already found
 			if g_cost > best_g.get(key, 10**18):
 				continue
 
@@ -256,7 +409,7 @@ def solve_ucs(
 				best_progress_score = current_progress
 				best_progress_key = key
 
-			for move, next_state in _generate_single_card_moves(state):
+			for move, next_state in _generate_single_card_moves(state, include_foundation_backmoves=False):
 				next_key = next_state.to_hashable()
 				next_g = g_cost + 1
 				if next_g < best_g.get(next_key, 10**18):
@@ -273,19 +426,6 @@ def solve_ucs(
 					heapq.heappush(frontier, (next_f, next_g, tie_breaker, next_state))
 
 		return False, _reconstruct_path(best_progress_key, parent, move_from_parent), expanded_nodes
-
-	def _build_state_path(start_state: GameState, moves_seq: List[Move]) -> List[GameState]:
-		path: List[GameState] = [start_state.clone()]
-		cursor = start_state.clone()
-		for source, target in moves_seq:
-			drag = cursor.pick_cards(source)
-			if drag is None:
-				break
-			if not cursor.apply_drop(drag, target):
-				cursor.cancel_drag(drag)
-				break
-			path.append(cursor.clone())
-		return path
 
 	solved, moves, expanded_nodes, metrics = measure_search(_search)
 	state_path = _build_state_path(initial_state, moves)

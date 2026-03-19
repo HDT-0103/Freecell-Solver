@@ -1,0 +1,21 @@
+{
+  "deal_id": 2,
+  "difficulty": "Easy",
+  "cascades": [
+    ["5C", "4C", "3S", "TC", "KS", "9H", "3D"],
+    ["6C", "KC", "8H", "4H", "QS", "6H", "JS"],
+    ["8S", "7S", "2S", "9C", "QH", "KD", "3C"],
+    ["6S", "5H", "AC", "5S", "AD", "4D", "AH"],
+    ["8C", "9D", "JD", "7D", "JC", "KH"],
+    ["TH", "7S", "AS", "4S", "8D", "2H"],
+    ["7H", "5D", "TS", "JH", "QD", "6D"],
+    ["2D", "QS", "9S", "3H", "2C", "TD"]
+  ],
+  "free_cells": [null, null, null, null],
+  "foundations": {
+    "C": 0,
+    "D": 0,
+    "H": 0,
+    "S": 0
+  }
+}

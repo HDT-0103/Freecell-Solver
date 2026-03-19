@@ -196,6 +196,7 @@ class BoardRenderer:
         self._drag_widgets: List[CardWidget]           = []
         self._drag_offset:  Tuple[int, int]            = (0, 0)
         self._drag_anchor:  Optional[Tuple[int, int]]  = None
+        self._highlighted_card: Optional[CardData]     = None
 
     # ------------------------------------------------------------------
     # Xay dung layout va surface tinh
@@ -325,6 +326,9 @@ class BoardRenderer:
     def get_widget(self, card: CardData) -> Optional[CardWidget]:
         return self._widgets.get(card)
 
+    def set_highlighted_card(self, card: Optional[CardData]) -> None:
+        self._highlighted_card = card
+
     def get_card_positions(self, state: GameState) -> Dict[CardData, Tuple[int, int]]:
         """Return pixel positions for every card in a given snapshot state."""
         result: Dict[CardData, Tuple[int, int]] = {}
@@ -367,6 +371,17 @@ class BoardRenderer:
                 w = self._widgets[card_data]
                 if w.rect.collidepoint(pos):
                     drag = self.state.pick_cards(("freecell", idx, 0))
+                    if drag:
+                        self._start_drag(drag, w, pos)
+                        return True
+
+        # Kiem tra Foundation top card
+        for idx, pile in enumerate(self.state.foundations):
+            if pile:
+                card_data = pile[-1]
+                w = self._widgets[card_data]
+                if w.rect.collidepoint(pos):
+                    drag = self.state.pick_cards(("foundation", idx, len(pile) - 1))
                     if drag:
                         self._start_drag(drag, w, pos)
                         return True
@@ -477,6 +492,12 @@ class BoardRenderer:
             for i, w in enumerate(self._drag_widgets):
                 w.move_to(ax, ay + i * self.card_overlap_y)
                 surface.blit(w.image, w.rect)
+
+        if self._highlighted_card is not None:
+            widget = self._widgets.get(self._highlighted_card)
+            if widget is not None:
+                highlight_rect = widget.rect.inflate(10, 10)
+                pygame.draw.rect(surface, (255, 223, 64), highlight_rect, width=4, border_radius=12)
 
         # Hien thi so nuoc da di (goc duoi phai)
         info = self.font_info.render(
