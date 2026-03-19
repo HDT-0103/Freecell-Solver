@@ -10,7 +10,6 @@ import pygame
 
 from config import CARD_IMAGE_DIR, SOLUTION_DIR
 from core import FreeCellGame, rules
-from core.adapter import state_to_gamestate, gamestate_to_state
 from core.loader import load_game_from_json
 from core.state import State
 from gui.animation import SolverAnimator
@@ -301,8 +300,7 @@ class FreeCellApp:
         if self._solver_pending:
             return
 
-        # Convert current state to GameState for solver
-        snapshot = state_to_gamestate(self.game.get_state())
+        snapshot = self.game.get_state().clone()
         stage_idx = min(self._solver_stage_idx, len(self._solver_stages) - 1)
         max_nodes, max_time_seconds = self._solver_stages[stage_idx]
         self._solver_job_id += 1
@@ -333,8 +331,7 @@ class FreeCellApp:
             return
 
         self._clear_hint()
-        # Convert current state to GameState for solver
-        snapshot = state_to_gamestate(self.game.get_state())
+        snapshot = self.game.get_state().clone()
         self._hint_job_id += 1
         job_id = self._hint_job_id
         self._hint_pending = True
@@ -401,21 +398,19 @@ class FreeCellApp:
         if result.solved:
             self._solver_stage_idx = 0
             name = self.last_loaded_sample or "random shuffle"
-            state_path = [gamestate_to_state(s) for s in result.state_path]
             self.solver_message = (
                 f"AI Solver: {name} - "
                 f"{result.metrics.solution_steps} steps, "
                 f"{result.metrics.elapsed_seconds:.2f}s"
             )
-            self.animator.animate_solution(state_path)
+            self.animator.animate_solution(result.state_path)
             self.is_animating = True
             return
 
         self._solver_stage_idx = min(self._solver_stage_idx + 1, len(self._solver_stages) - 1)
         if len(result.state_path) > 1:
             self._solver_stage_idx = 0
-            state_path = [gamestate_to_state(s) for s in result.state_path]
-            self.animator.animate_solution(state_path)
+            self.animator.animate_solution(result.state_path)
             self.is_animating = True
             self.solver_message = f"AI Solver: advanced {len(result.state_path) - 1} moves - continuing..."
             return
@@ -518,13 +513,16 @@ class FreeCellApp:
             return f"Tableau {index + 1}"
         if zone == "freecell":
             return f"Free Cell {index + 1}"
+        if isinstance(index, str):
+            suit_names = {"C": "Clubs", "D": "Diamonds", "H": "Hearts", "S": "Spades"}
+            return f"Foundation {suit_names.get(index, index)}"
         suit_names = ["Clubs", "Diamonds", "Hearts", "Spades"]
         return f"Foundation {suit_names[index]}"
 
     def _format_card(self, card) -> str:
         ranks = {1: "A", 11: "J", 12: "Q", 13: "K"}
         rank_label = ranks.get(card.rank, str(card.rank))
-        suit_label = card.suit.title()
+        suit_label = {"C": "Clubs", "D": "Diamonds", "H": "Hearts", "S": "Spades"}.get(card.suit, str(card.suit).title())
         return f"{rank_label} of {suit_label}"
 
     def _show_hint(self, hint: HintMove | None) -> None:

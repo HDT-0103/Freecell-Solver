@@ -3,7 +3,7 @@ interface.py
 ------------
 Toan bo phan UI cua FreeCell dung Pygame:
   - CardImageLoader : nap va cache anh la bai
-  - CardWidget      : sprite pygame bao boc CardData
+    - CardWidget      : sprite pygame bao boc Card
   - Button          : nut bam menu
   - BoardRenderer   : quan ly hien thi ban bai va keo-tha
 """
@@ -103,7 +103,7 @@ class CardImageLoader:
 
 
 # ---------------------------------------------------------------------------
-# Widget la bai (Sprite pygame wrapping CardData)
+# Widget la bai (Sprite pygame wrapping Card)
 # ---------------------------------------------------------------------------
 
 class CardWidget(pygame.sprite.Sprite):
@@ -155,7 +155,7 @@ class Button:
 class BoardRenderer:
     """Phu trach moi thu lien quan den hien thi ban FreeCell.
 
-    Tham chieu den GameState de doc trang thai; khong tu thay doi luat.
+    Tham chieu den core State de doc trang thai; khong tu thay doi luat.
     Quan ly toan bo vong doi CardWidget (tao moi sau moi reset).
     Xu ly keo-tha hoan toan ben trong (drag state noi bo).
     """
@@ -205,7 +205,7 @@ class BoardRenderer:
         self._static_surface = pygame.Surface(screen_rect.size)
         self._rebuild_static_surface()
 
-        # Map CardData -> CardWidget, duoc tao lai sau moi reset()
+        # Map Card -> CardWidget, duoc tao lai sau moi reset()
         self._widgets: Dict[Card, CardWidget] = {}
 
         # Drag state noi bo
@@ -280,7 +280,7 @@ class BoardRenderer:
     # ------------------------------------------------------------------
 
     def on_reset(self) -> None:
-        """Goi ngay sau GameState.reset() de tao lai toan bo CardWidget."""
+        """Goi ngay sau khi thay state de tao lai toan bo CardWidget."""
         self._widgets.clear()
         self._drag_info    = None
         self._drag_widgets = []
@@ -474,7 +474,7 @@ class BoardRenderer:
             success = result.ok
 
             if success:
-                # Update the GameState wrapper from authoritative core state.
+                # Update renderer state from authoritative core state.
                 self.state = result.state.clone()
         
         if not success and self._drag_info:
