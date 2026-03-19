@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from Source.core.state import FREE_CELL_COUNT, State
+from .state import FREE_CELL_COUNT, State
 
 
 FOUNDATION_SUITS = ("clubs", "diamonds", "hearts", "spades")

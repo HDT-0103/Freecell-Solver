@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import pygame
 
 from core.state import CardData, DragInfo, GameState, SourceRef, TargetRef
+
+if TYPE_CHECKING:
+    from core import FreeCellGame
 
 
 # ---------------------------------------------------------------------------
@@ -157,10 +160,14 @@ class BoardRenderer:
         screen_rect:  pygame.Rect,
         image_loader: CardImageLoader,
         game_state:   GameState,
+        game: Optional[FreeCellGame] = None,
+        view_model: Optional[Dict] = None,
     ) -> None:
         self.screen_rect = screen_rect
         self.loader      = image_loader
         self.state       = game_state
+        self.game        = game
+        self.view_model  = view_model or {}
 
         # Lay kich thuoc la bai tu anh mau
         sample            = image_loader.get_image(1, "spades")
@@ -329,6 +336,23 @@ class BoardRenderer:
     def set_highlighted_card(self, card: Optional[CardData]) -> None:
         self._highlighted_card = card
 
+    def update_state(self, state: GameState) -> None:
+        """Update the internal state to a new GameState."""
+        self.state = state
+        
+        # Ensure all widgets exist for new state before syncing positions
+        for card_data in self.state.free_cells:
+            if card_data:
+                self._ensure_widget(card_data)
+        for pile in self.state.foundations:
+            for card_data in pile:
+                self._ensure_widget(card_data)
+        for cascade in self.state.cascades:
+            for card_data in cascade:
+                self._ensure_widget(card_data)
+                
+        self.sync_positions()
+
     def get_card_positions(self, state: GameState) -> Dict[CardData, Tuple[int, int]]:
         """Return pixel positions for every card in a given snapshot state."""
         result: Dict[CardData, Tuple[int, int]] = {}
@@ -431,8 +455,46 @@ class BoardRenderer:
             return False
 
         target  = self.find_drop_target(pos)
-        success = self.state.apply_drop(self._drag_info, target) if target else False
-        if not success:
+        success = False
+        
+        if target and self.game:
+            # Translate GUI location names to core move names before submitting.
+            src_type, src_idx, src_start = self._drag_info.source
+            dst_type, dst_idx = target
+            can_use_core_api = src_type in ("cascade", "freecell")
+
+            if can_use_core_api:
+                src_type_core = "free_cell" if src_type == "freecell" else src_type
+                dst_type_core = "free_cell" if dst_type == "freecell" else dst_type
+                if dst_type == "foundation":
+                    dst_idx_core = ["C", "D", "H", "S"][dst_idx]
+                else:
+                    dst_idx_core = dst_idx
+
+                count = len(self._drag_info.cards)
+                if src_type == "freecell":
+                    count = 1
+
+                result = self.game.try_move(src_type_core, src_idx, dst_type_core, dst_idx_core, count=count)
+                success = result.ok
+
+                if success:
+                    # Update the GameState wrapper from authoritative core state.
+                    from core.adapter import state_to_gamestate
+                    self.state = state_to_gamestate(result.state)
+
+            if not success:
+                # Fallback supports moves that only the legacy GUI state allows
+                # (for example, dragging back from foundations).
+                success = self.state.apply_drop(self._drag_info, target)
+                if success:
+                    from core.adapter import gamestate_to_state
+                    self.game.set_state(gamestate_to_state(self.state))
+        else:
+            # Fallback to old GameState API for backward compatibility
+            success = self.state.apply_drop(self._drag_info, target) if target else False
+        
+        if not success and self._drag_info:
             self.state.cancel_drag(self._drag_info)
 
         self.sync_positions()

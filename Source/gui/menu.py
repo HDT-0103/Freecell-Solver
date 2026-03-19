@@ -82,15 +82,8 @@ class MenuScreen:
                 text_color=(251, 250, 219),
             ),
             Button(
-                text="Medium",
-                rect=pygame.Rect(self.start_button.rect.left, self.start_button.rect.bottom + 64, bw, 50),
-                base_color=(123, 105, 24),
-                hover_color=(152, 129, 30),
-                text_color=(255, 247, 214),
-            ),
-            Button(
                 text="Hard",
-                rect=pygame.Rect(self.start_button.rect.left, self.start_button.rect.bottom + 122, bw, 50),
+                rect=pygame.Rect(self.start_button.rect.left, self.start_button.rect.bottom + 64, bw, 50),
                 base_color=(134, 60, 30),
                 hover_color=(164, 75, 38),
                 text_color=(255, 244, 210),

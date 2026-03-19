@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 
-from Source.core import rules
-from Source.core.rules import Move
-from Source.core.state import Card, State
+from . import rules
+from .rules import Move
+from .state import Card, State
 
 
 @dataclass(frozen=True)
@@ -49,8 +49,8 @@ class FreeCellGame:
         else:
             self.state = State.microsoft_shuffle(1 if seed is None else seed)
 
-    def new_game(self, seed):
-        self.state = State.microsoft_shuffle(seed)
+    def new_game(self, seed=None):
+        self.state = State.microsoft_shuffle(1 if seed is None else seed)
         return self.get_view_model()
 
     def set_state(self, state):

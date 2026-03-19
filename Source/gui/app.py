@@ -9,6 +9,8 @@ from typing import Dict, List
 import pygame
 
 from config import CARD_IMAGE_DIR, SOLUTION_DIR
+from core import FreeCellGame
+from core.adapter import state_to_gamestate, gamestate_to_state
 from core.loader import load_game_from_json
 from core.state import GameState
 from gui.animation import SolverAnimator
@@ -42,8 +44,11 @@ class FreeCellApp:
         )
 
         loader = CardImageLoader(base_dir=CARD_IMAGE_DIR, card_size=(110, 154))
-        self.game_state = GameState()
-        self.board = BoardRenderer(self.screen.get_rect(), loader, self.game_state)
+        self.game = FreeCellGame(seed=1)
+        self.view_model = self.game.get_view_model()
+        # Keep a GameState wrapper for the renderer (it will read from view_model)
+        self.game_state = state_to_gamestate(self.game.get_state())
+        self.board = BoardRenderer(self.screen.get_rect(), loader, self.game_state, self.game, self.view_model)
         self.is_stuck = False
 
         self.animator = SolverAnimator(step_delay_ms=500)
@@ -89,7 +94,7 @@ class FreeCellApp:
             "Place a card on another Tableau card if colors alternate and rank is one lower.",
             "Move cards to Foundation only when suit matches and rank is the next needed card.",
             "Use Free Cells as temporary storage to unlock difficult positions.",
-            "Shortcuts: ESC to return to menu, R to start a new shuffled game.",
+            "Shortcuts: ESC to return to menu, H to request a hint.",
         ]
 
     def run(self) -> None:
@@ -108,7 +113,7 @@ class FreeCellApp:
                 if was_active and not self.animator.status.active and self.animator.status.finished:
                     if self.animator.status.failed:
                         self.solver_message = "Animation failed due to an invalid transition."
-                    elif self.game_state.is_won():
+                    elif self.view_model.get("is_goal", False):
                         self.solver_message = "AI Solver completed: you win!"
                     else:
                         if self.ai_solver_mode:
@@ -169,19 +174,6 @@ class FreeCellApp:
                 self.ai_solver_mode = False
                 self._ai_seen_states.clear()
                 self.scene = "menu"
-            elif event.key == pygame.K_r:
-                self._cancel_pending_solver()
-                self._cancel_pending_hint()
-                self.game_state.reset()
-                self.board.on_reset()
-                self._clear_hint()
-                self.animator.clear()
-                self.is_animating = False
-                self.ai_solver_mode = False
-                self._ai_seen_states.clear()
-                self.solver_result = None
-                self.solver_message = ""
-                self._refresh_game_flags()
             elif event.key == pygame.K_h and not self.ai_solver_mode and not self.animator.status.active:
                 self._request_hint()
 
@@ -202,6 +194,7 @@ class FreeCellApp:
                 if moved:
                     self._cancel_pending_hint()
                     self._clear_hint()
+                    self._update_game_from_state()
                     self._refresh_game_flags()
 
     def _start_manual_game(self, difficulty: str) -> None:
@@ -223,7 +216,8 @@ class FreeCellApp:
                 self.scene = "easy_select"
                 return
 
-            self.game_state.reset()
+            self.game.new_game(seed=None)
+            self._update_game_from_state()
             self.board.on_reset()
             self._refresh_game_flags()
             self.solver_message = "No Easy sample deals found. Started a random shuffle."
@@ -234,7 +228,8 @@ class FreeCellApp:
         if loaded:
             self.solver_message = f"Loaded {difficulty.title()} sample: {self.last_loaded_sample}"
         else:
-            self.game_state.reset()
+            self.game.new_game(seed=None)
+            self._update_game_from_state()
             self.board.on_reset()
             self._refresh_game_flags()
             self.solver_message = f"No {difficulty.title()} sample deals found. Started a random shuffle."
@@ -251,7 +246,8 @@ class FreeCellApp:
     def _start_selected_easy_game(self, selected_index: int) -> None:
         easy_games = self._sample_games_by_difficulty.get("easy", [])
         if not easy_games:
-            self.game_state.reset()
+            self.game.new_game(seed=None)
+            self._update_game_from_state()
             self.board.on_reset()
             self._refresh_game_flags()
             self.solver_message = "No Easy sample deals found. Started a random shuffle."
@@ -265,7 +261,8 @@ class FreeCellApp:
         if loaded:
             self.solver_message = f"Loaded Easy sample: {self.last_loaded_sample}"
         else:
-            self.game_state.reset()
+            self.game.new_game(seed=None)
+            self._update_game_from_state()
             self.board.on_reset()
             self._refresh_game_flags()
             self.solver_message = "Failed to load selected Easy deal. Started a random shuffle."
@@ -287,7 +284,8 @@ class FreeCellApp:
 
         loaded = self._load_ai_game()
         if not loaded:
-            self.game_state.reset()
+            self.game.new_game(seed=None)
+            self._update_game_from_state()
             self.board.on_reset()
             self._refresh_game_flags()
             self.solver_message = "AI Solver sample game_01.json not found. Started a random shuffle."
@@ -301,7 +299,8 @@ class FreeCellApp:
         if self._solver_pending:
             return
 
-        snapshot = self.game_state.clone()
+        # Convert current state to GameState for solver
+        snapshot = state_to_gamestate(self.game.get_state())
         stage_idx = min(self._solver_stage_idx, len(self._solver_stages) - 1)
         max_nodes, max_time_seconds = self._solver_stages[stage_idx]
         self._solver_job_id += 1
@@ -332,7 +331,8 @@ class FreeCellApp:
             return
 
         self._clear_hint()
-        snapshot = self.game_state.clone()
+        # Convert current state to GameState for solver
+        snapshot = state_to_gamestate(self.game.get_state())
         self._hint_job_id += 1
         job_id = self._hint_job_id
         self._hint_pending = True
@@ -355,6 +355,11 @@ class FreeCellApp:
         self._hint_pending = False
         self._hint_async_result = None
         self._hint_async_error = None
+
+    def _update_game_from_state(self) -> None:
+        """Update game_state wrapper from FreeCellGame state."""
+        self.game_state = state_to_gamestate(self.game.get_state())
+        self.board.update_state(self.game_state)
 
     def _poll_hint_result(self) -> None:
         if not self._hint_pending:
@@ -451,9 +456,11 @@ class FreeCellApp:
         sample_idx = self._sample_game_indices.get(difficulty, 0)
         file_path = files[sample_idx % len(files)]
         self._sample_game_indices[difficulty] = (sample_idx + 1) % len(files)
-        ok = load_game_from_json(file_path, self.game_state, on_reset=self.board.on_reset)
+        ok = load_game_from_json(file_path, self.game)
         if ok:
             self.last_loaded_sample = os.path.join(difficulty, os.path.basename(file_path))
+            self._update_game_from_state()
+            self.board.on_reset()
             self._refresh_game_flags()
         return ok
 
@@ -464,10 +471,12 @@ class FreeCellApp:
 
         index = max(0, min(index, len(files) - 1))
         file_path = files[index]
-        ok = load_game_from_json(file_path, self.game_state, on_reset=self.board.on_reset)
+        ok = load_game_from_json(file_path, self.game)
         if ok:
             self._sample_game_indices[difficulty] = (index + 1) % len(files)
             self.last_loaded_sample = os.path.join(difficulty, os.path.basename(file_path))
+            self._update_game_from_state()
+            self.board.on_reset()
             self._refresh_game_flags()
         return ok
 
@@ -475,9 +484,11 @@ class FreeCellApp:
         if self._ai_game_path is None:
             return False
 
-        ok = load_game_from_json(self._ai_game_path, self.game_state, on_reset=self.board.on_reset)
+        ok = load_game_from_json(self._ai_game_path, self.game)
         if ok:
             self.last_loaded_sample = os.path.join("easy", os.path.basename(self._ai_game_path))
+            self._update_game_from_state()
+            self.board.on_reset()
             self._refresh_game_flags()
         return ok
 
@@ -608,7 +619,12 @@ class FreeCellApp:
             self._draw_game_hud()
 
     def _draw_game_hud(self) -> None:
-        hint = self.hint_font.render("ESC: Menu   |   R: New Shuffle   |   H: Hint", True, (255, 250, 205))
+        if self.ai_solver_mode:
+            hint_text = "ESC: Menu"
+        else:
+            hint_text = "ESC: Menu   |   H: Hint"
+            
+        hint = self.hint_font.render(hint_text, True, (255, 250, 205))
         self.screen.blit(hint, (18, self.screen.get_height() - hint.get_height() - 14))
 
         if self.is_animating:
@@ -622,12 +638,10 @@ class FreeCellApp:
             msg = self.hint_font.render(self.solver_message, True, (255, 245, 180))
             self.screen.blit(msg, (18, 16))
 
-        if self.ai_solver_mode and not self.is_animating and not self.game_state.is_won():
-            lock = self.hint_font.render("AI Solver mode: manual card movement is disabled.", True, (255, 236, 170))
-            self.screen.blit(lock, (18, 48))
+        is_won = self.view_model.get("is_goal", False)
 
         if self.solver_result and (
-            self.game_state.is_won() and (self.animator.status.finished or self.solver_result.metrics.solution_steps == 0)
+            is_won and (self.animator.status.finished or self.solver_result.metrics.solution_steps == 0)
         ):
             draw_solver_stats(self.screen, self.hint_font, self.body_font, self.solver_result)
 
@@ -640,4 +654,7 @@ class FreeCellApp:
         )
 
     def _refresh_game_flags(self) -> None:
-        self.is_stuck = (not self.game_state.is_won()) and (not self.game_state.has_any_legal_move())
+        self.view_model = self.game.get_view_model()
+        is_won = self.view_model["is_goal"]
+        has_moves = len(self.view_model.get("legal_moves", [])) > 0
+        self.is_stuck = (not is_won) and (not has_moves)

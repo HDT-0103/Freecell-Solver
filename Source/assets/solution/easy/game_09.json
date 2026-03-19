@@ -8,7 +8,7 @@
     ["TS", "4D", "6S", "3D", "7H", "7C", "AD"],
     ["QS", "QD", "2C", "QH", "AS", "6H"],
     ["8H", "6D", "JD", "KD", "KH", "AC"],
-    ["JS", "4S", "8S", "KS", "9S", "QC"],
+    ["JC", "4S", "8S", "KS", "9S", "QC"],
     ["3C", "5S", "KC", "5C", "6C", "3S"]
   ],
   "free_cells": [null, null, null, null],
