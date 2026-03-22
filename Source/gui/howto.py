@@ -103,29 +103,12 @@ class HowToScreen:
         pygame.draw.rect(self.screen, fill, btn.rect, border_radius=10)
         pygame.draw.rect(self.screen, GOLD, btn.rect, width=2, border_radius=10)
 
-        cx = btn.rect.centerx - 6
-        cy = btn.rect.centery
-        # Đầu người
-        pygame.draw.circle(self.screen, GOLD, (cx - 6, cy - 10), 5)
-        # Thân
-        pygame.draw.line(self.screen, GOLD, (cx - 6, cy - 5), (cx - 6, cy + 7), 3)
-        # Chân
-        pygame.draw.line(self.screen, GOLD, (cx - 6, cy + 7), (cx - 12, cy + 15), 2)
-        pygame.draw.line(self.screen, GOLD, (cx - 6, cy + 7), (cx,      cy + 15), 2)
-        # Tay
-        pygame.draw.line(self.screen, GOLD, (cx - 6, cy),     (cx + 2,  cy - 4), 2)
-        # Khung cửa
-        dr = pygame.Rect(cx + 4, cy - 12, 14, 22)
-        pygame.draw.rect(self.screen, GOLD, dr, width=2, border_radius=2)
-        # Mũi tên →
-        ax, ay = cx - 2, cy
-        pygame.draw.line(self.screen, GOLD, (ax,     ay),     (ax + 8, ay),     2)
-        pygame.draw.line(self.screen, GOLD, (ax + 5, ay - 3), (ax + 8, ay),     2)
-        pygame.draw.line(self.screen, GOLD, (ax + 5, ay + 3), (ax + 8, ay),     2)
-        # Label
-        lbl = self.hint_font.render("Back", True, GOLD)
-        self.screen.blit(lbl, (btn.rect.centerx - lbl.get_width() // 2,
-                                btn.rect.bottom - lbl.get_height() - 4))
+        lbl  = self.hint_font.render("Back", True, GOLD)
+        shad = self.hint_font.render("Back", True, (0, 0, 0))
+        lx = btn.rect.centerx - lbl.get_width() // 2
+        ly = btn.rect.centery - lbl.get_height() // 2
+        self.screen.blit(shad, (lx + 1, ly + 1))
+        self.screen.blit(lbl,  (lx,     ly))
 
     def _title(self, text: str, y: int = 14) -> int:
         """Draw page title; return y just below it."""

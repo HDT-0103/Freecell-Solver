@@ -276,7 +276,9 @@ class FreeCellApp:
         while self.running:
             if self.scene == "outro":
                 if self.outro_clip is not None:
-                    # KHÔNG resize — giữ kích thước chuẩn, letterbox
+                    self._switch_to_menu_screen()
+                    self.screen.fill((0, 0, 0))        # ← xóa sạch board cũ
+                    pygame.display.flip()              # ← hiện màn đen ngay lập tức
                     self._play_custom_video(self.outro_clip, allow_skip=False)
                 self.running = False
                 break

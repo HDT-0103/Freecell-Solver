@@ -4,10 +4,16 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from core import rules
-from core.rules import Move as CoreMove
-from core.state import Card, State
-from utils.metrics import SearchMetrics, measure_search
+try:
+    from core import rules
+    from core.rules import Move as CoreMove
+    from core.state import Card, State
+    from utils.metrics import SearchMetrics, measure_search
+except ModuleNotFoundError:
+    from Source.core import rules
+    from Source.core.rules import Move as CoreMove
+    from Source.core.state import Card, State
+    from Source.utils.metrics import SearchMetrics, measure_search
 
 # Re-use type aliases from ucs convention
 SourceRef = Tuple[str, int, int]
@@ -143,9 +149,6 @@ def solve_dfs(
 
             state, path = stack.pop()
 
-            if rules.is_goal(state):
-                return True, path, expanded_nodes
-
             current_depth = len(path)
             if current_depth >= max_depth:
                 continue
@@ -169,13 +172,17 @@ def solve_dfs(
             for move, next_state in successors:
                 next_key = next_state.as_key()
                 next_depth = current_depth + 1
+                next_path = path + [move]
+
+                if rules.is_goal(next_state):
+                    return True, next_path, expanded_nodes
 
                 # Only revisit if we reach with a strictly shallower depth
                 if visited.get(next_key, 10**18) <= next_depth:
                     continue
 
                 visited[next_key] = next_depth
-                stack.append((next_state, path + [move]))
+                stack.append((next_state, next_path))
 
         return False, best_partial_moves, expanded_nodes
 
