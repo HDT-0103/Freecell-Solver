@@ -5,7 +5,7 @@ from typing import List, Optional, Tuple
 
 import pygame
 
-from core.state import CardData, GameState
+from core.state import Card, State
 from gui.interface import BoardRenderer
 
 @dataclass
@@ -18,19 +18,19 @@ class AnimationStatus:
 
 
 class SolverAnimator:
-	"""Animate a solution path of GameState snapshots with smooth transitions."""
+	"""Animate a solution path of core State snapshots with smooth transitions."""
 
 	def __init__(self, step_delay_ms: int = 500, transition_frames: int = 10) -> None:
 		self.step_delay_ms = step_delay_ms
 		self.transition_frames = transition_frames
-		self._solution_path: List[GameState] = []
+		self._solution_path: List[State] = []
 		self._index = 0
 		self._last_step_tick = 0
 		self._clock = pygame.time.Clock()
 
 		self._in_transition = False
 		self._transition_frame = 0
-		self._moving_card: Optional[CardData] = None
+		self._moving_card: Optional[Card] = None
 		self._start_pos: Optional[Tuple[int, int]] = None
 		self._end_pos: Optional[Tuple[int, int]] = None
 
@@ -40,8 +40,8 @@ class SolverAnimator:
 	def is_animating(self) -> bool:
 		return self.status.active
 
-	def animate_solution(self, solution_path: List[GameState]) -> None:
-		"""Start animation from a list of board states returned by a solver."""
+	def animate_solution(self, solution_path: List[State]) -> None:
+		"""Start animation from a list of core states."""
 		self._solution_path = [s.clone() for s in solution_path]
 		self._index = 0
 		self._last_step_tick = pygame.time.get_ticks()
@@ -74,13 +74,13 @@ class SolverAnimator:
 	def _find_moved_card(
 		self,
 		board: BoardRenderer,
-		prev_state: GameState,
-		next_state: GameState,
-	) -> Tuple[Optional[CardData], Optional[Tuple[int, int]], Optional[Tuple[int, int]]]:
+		prev_state: State,
+		next_state: State,
+	) -> Tuple[Optional[Card], Optional[Tuple[int, int]], Optional[Tuple[int, int]]]:
 		prev_positions = board.get_card_positions(prev_state)
 		next_positions = board.get_card_positions(next_state)
 
-		best_card: Optional[CardData] = None
+		best_card: Optional[Card] = None
 		best_start: Optional[Tuple[int, int]] = None
 		best_end: Optional[Tuple[int, int]] = None
 		best_dist = -1

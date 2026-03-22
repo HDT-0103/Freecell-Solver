@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
-from typing import Callable, List
+from typing import List, TYPE_CHECKING
 
-from core.state import CardData, GameState
+from core.state import Card, State
+
+if TYPE_CHECKING:
+    from core.game_service import FreeCellGame
 
 
-def parse_card_token(token: str) -> CardData:
+def parse_card_token_new(token: str) -> Card:
+    """Parse card token to new Card format (H/D/C/S)."""
     token = token.strip().upper()
     if len(token) < 2:
         raise ValueError(f"Invalid card token: {token}")
@@ -29,23 +33,22 @@ def parse_card_token(token: str) -> CardData:
             raise ValueError(f"Invalid rank in token: {token}")
 
     suit_map = {
-        "C": "clubs",
-        "D": "diamonds",
-        "H": "hearts",
-        "S": "spades",
+        "C": "C",
+        "D": "D",
+        "H": "H",
+        "S": "S",
     }
     if suit_part not in suit_map:
         raise ValueError(f"Invalid suit in token: {token}")
 
-    return CardData(rank=rank, suit=suit_map[suit_part])
+    return Card(rank=rank, suit=suit_map[suit_part])
 
 
 def load_game_from_json(
     file_path: str,
-    game_state: GameState,
-    on_reset: Callable[[], None] | None = None,
+    game: FreeCellGame,
 ) -> bool:
-    """Load game state from JSON file into the provided GameState instance."""
+    """Load game state from JSON file into the provided FreeCellGame instance."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             payload = json.load(f)
@@ -54,17 +57,17 @@ def load_game_from_json(
         if not isinstance(cascades_raw, list) or len(cascades_raw) != 8:
             raise ValueError("JSON must contain 8 cascades")
 
-        new_cascades: List[List[CardData]] = [[] for _ in range(8)]
-        new_free_cells: List[CardData | None] = [None] * 4
-        new_foundations: List[List[CardData]] = [[] for _ in range(4)]
-        used_cards: set[CardData] = set()
+        new_cascades: List[List[Card]] = [[] for _ in range(8)]
+        new_free_cells: List[Card | None] = [None] * 4
+        new_foundations: dict = {"C": 0, "D": 0, "H": 0, "S": 0}
+        used_cards: set[Card] = set()
 
         for i, column in enumerate(cascades_raw):
             if not isinstance(column, list):
                 raise ValueError("Each cascade must be a list")
 
             for token in column:
-                card = parse_card_token(str(token))
+                card = parse_card_token_new(str(token))
                 if card in used_cards:
                     raise ValueError(f"Duplicate card found: {token}")
                 used_cards.add(card)
@@ -77,35 +80,24 @@ def load_game_from_json(
             if token is None:
                 new_free_cells[i] = None
             else:
-                card = parse_card_token(str(token))
+                card = parse_card_token_new(str(token))
                 if card in used_cards:
                     raise ValueError(f"Duplicate card found: {token}")
                 used_cards.add(card)
                 new_free_cells[i] = card
 
         foundations_raw = payload.get("foundations", {"C": 0, "D": 0, "H": 0, "S": 0})
-        suit_map = {"C": 0, "D": 1, "H": 2, "S": 3}
-        suit_names = {"C": "clubs", "D": "diamonds", "H": "hearts", "S": "spades"}
-
         for suit_abbr, count in foundations_raw.items():
-            if suit_abbr in suit_map:
-                idx = suit_map[suit_abbr]
+            if suit_abbr in new_foundations:
+                new_foundations[suit_abbr] = int(count)
                 for rank in range(1, int(count) + 1):
-                    card = CardData(rank=rank, suit=suit_names[suit_abbr])
+                    card = Card(rank=rank, suit=suit_abbr)
                     if card in used_cards:
                         raise ValueError(f"Duplicate foundation card: {suit_abbr}{rank}")
                     used_cards.add(card)
-                    new_foundations[idx].append(card)
 
-        game_state.free_cells = new_free_cells
-        game_state.foundations = new_foundations
-        game_state.cascades = new_cascades
-        game_state.move_count = 0
-        if hasattr(game_state, "_history"):
-            game_state._history.clear()
-
-        if on_reset is not None:
-            on_reset()
+        new_state = State(cascades=new_cascades, free_cells=new_free_cells, foundations=new_foundations)
+        game.set_state(new_state)
 
         return True
     except Exception as exc:
