@@ -187,7 +187,7 @@ class BoardRenderer:
 
         # Thong so layout
         self.margin_x      = 26
-        self.top_y         = 80
+        self.top_y         = 95
         self.cascades_y    = self.top_y + self.card_h + 72
         self.card_overlap_y = max(26, self.card_h // 4)
         self.slot_gap       = max(
@@ -239,7 +239,7 @@ class BoardRenderer:
                 pygame.Rect(x, self.top_y, self.card_w, self.card_h)
             )
 
-        casc_h = self.screen_rect.height - self.cascades_y - 24
+        casc_h = self.screen_rect.height - self.cascades_y - 45
         for i in range(8):
             x = self.margin_x + i * (self.card_w + self.slot_gap)
             self.cascade_rects.append(
@@ -253,6 +253,9 @@ class BoardRenderer:
 
     def _rebuild_static_surface(self) -> None:
         """Ve nen + khung cac o bai len surface tinh."""
+        EMERALD = (4, 98, 56)
+        GOLD    = (212, 175, 55)
+
         if self.board_bg is not None:
             bg = pygame.transform.scale(self.board_bg, self.screen_rect.size)
             self._static_surface.blit(bg, (0, 0))
@@ -264,16 +267,17 @@ class BoardRenderer:
                     self._static_surface, (5, shade, 22),
                     (0, y), (self.screen_rect.width, y),
                 )
-        self._draw_slot_group(self.free_cell_rects,  "Free Cells")
-        self._draw_slot_group(self.foundation_rects, "Foundation")
+        self._draw_slot_group(self.free_cell_rects,  "Free Cells", color=EMERALD)
+        self._draw_slot_group(self.foundation_rects, "Foundation", color=GOLD)
         self._draw_slot_group(self.cascade_rects,    "Tableau")
 
     def _draw_slot_group(
-        self, rects: Sequence[pygame.Rect], title: str
+        self, rects: Sequence[pygame.Rect], title: str, color: Optional[tuple] = None
     ) -> None:
+        draw_color = color if color is not None else self.SLOT_COLOR
         for rect in rects:
             pygame.draw.rect(
-                self._static_surface, self.SLOT_COLOR,
+                self._static_surface, draw_color,
                 rect, width=2, border_radius=8,
             )
             pygame.draw.rect(
@@ -589,7 +593,19 @@ class BoardRenderer:
             if card.rank == identity[0] and card.suit == identity[1]:
                 return widget
         return None
-
+    
+    def rebuild_for_screen(self, screen_rect: pygame.Rect) -> None:
+        """Cập nhật kích thước mới và tạo lại toàn bộ bề mặt vẽ tĩnh."""
+        self.screen_rect = screen_rect
+        
+        # QUAN TRỌNG: Tạo lại một surface mới với kích thước mới
+        self._static_surface = pygame.Surface(self.screen_rect.size)
+        
+        # Tính toán lại vị trí các ô (slot_gap sẽ tự giãn ra)
+        self._build_layout()
+        
+        # Vẽ lại hình nền và các khung ô lên tờ giấy mới
+        self._rebuild_static_surface()
 
 def _suit_short_to_long(suit: str) -> str:
     return {"H": "hearts", "D": "diamonds", "C": "clubs", "S": "spades"}[suit]
@@ -609,3 +625,4 @@ def _normalize_card_identity(card) -> Optional[tuple[int, str]]:
 
     long_to_short = {"hearts": "H", "diamonds": "D", "clubs": "C", "spades": "S"}
     return (rank, long_to_short.get(suit, suit))
+

@@ -544,14 +544,8 @@ class MenuScreen:
     # Event handlers
     # ------------------------------------------------------------------
 
-    def handle_menu_event(
-        self,
-        event: pygame.event.Event,
-        on_start_game: Callable[[str], None],
-        on_start_solver: Callable[[str], None],
-        on_howto: Callable[[], None],
-        on_exit: Callable[[], None],
-    ) -> None:
+    def handle_menu_event(self, event, on_start_game, on_start_solver,
+                          on_ai_select, on_howto, on_exit) -> None:
         if event.type != pygame.MOUSEBUTTONDOWN or event.button != 1:
             return
 
@@ -561,8 +555,8 @@ class MenuScreen:
             return
 
         if self.solver_button.rect.collidepoint(event.pos):
-            self.solver_dropdown_open = not self.solver_dropdown_open
             self.manual_dropdown_open = False
+            on_ai_select()
             return
 
         if self.manual_dropdown_progress >= 0.95:

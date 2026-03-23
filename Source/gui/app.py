@@ -4,10 +4,15 @@ import os
 import re
 import sys
 import threading
+import math
 from gui.howto import HowToScreen
 from typing import Dict, List
 
 import pygame
+
+GOLD   = (212, 175, 55)
+GOLD_L = (255, 223, 100)
+WHITE  = (255, 255, 255)
 
 try:
     from moviepy.editor import VideoFileClip
@@ -38,7 +43,7 @@ SolverResult = UCSSearchResult | AStarResult
 class FreeCellApp:
     """Main application controller for FreeCell (scene management + game loop)."""
 
-    _GAME_SIZE = (1366, 768)  # kích thước cố định cho game/easy_select/howto
+    _GAME_SIZE = (1366, 800)  
 
     @staticmethod
     def _center_window(win_w: int, win_h: int) -> None:
@@ -68,7 +73,8 @@ class FreeCellApp:
             self.menu.rebuild_for_screen(self.screen)
             self.howto_screen.rebuild_for_screen(self.screen)
         if hasattr(self, "board"):
-            self.board.rect = pygame.Rect(0, 0, *self._GAME_SIZE)
+            new_rect = pygame.Rect(0, 0, *self._GAME_SIZE)
+            self.board.rebuild_for_screen(new_rect)
 
     def _switch_to_menu_screen(self) -> None:
         """Resize về kích thước background/menu và cập nhật menu."""
@@ -107,12 +113,15 @@ class FreeCellApp:
         self.scene = "menu"
         self.selected_easy_game_index = 0
         self.selected_manual_difficulty = "easy"
+        self.victory_timer = 0
+        self.particles = []
 
         self.title_font = pygame.font.SysFont("georgia", 64, bold=True)
         self.menu_font = pygame.font.SysFont("georgia", 36, bold=True)
         self.hint_font = pygame.font.SysFont("georgia", 24, bold=True)
         self.body_font = pygame.font.SysFont("georgia", 28)
 
+       
         # 1. Background Image setup cho Menu
         bg_path = os.path.join(os.path.dirname(__file__), "..", "..", "background.jpg")
         bg_image = None
@@ -121,19 +130,25 @@ class FreeCellApp:
                 bg_image = pygame.image.load(bg_path).convert()
             except Exception as e:
                 print(f"Error loading background image: {e}")
+        self.bg_image = bg_image
 
+        self.page0_bg = None
+        p0_path = os.path.join(os.path.dirname(__file__), "..", "..", "howto_p0_bg.png")
+        if os.path.exists(p0_path):
+            self.page0_bg = pygame.image.load(p0_path).convert()
+        
         # 2. Background cho HowToPlay - dùng để xác định kích thước chuẩn của cửa sổ
         howto_bg = None
         howto_bg_path = os.path.join(os.path.dirname(__file__), "..", "..", "howto_bg.png")
         if os.path.exists(howto_bg_path):
             try:
                 howto_bg = pygame.image.load(howto_bg_path).convert()
-                self._howto_size = howto_bg.get_size()
+                self._howto_size = (820, 990)
             except Exception as e:
                 print(f"Error loading howto background: {e}")
         
         if not hasattr(self, "_howto_size"):
-            self._howto_size = (820, 1024)
+            self._howto_size = (820, 990)
 
         # 3. Đồng bộ kích thước chuẩn cho các màn hình phụ
         self._bg_size       = self._howto_size
@@ -195,6 +210,21 @@ class FreeCellApp:
                 print(f"Error loading {filename}: {e}")
                 return None
 
+        # Khởi tạo mixer nếu chưa có (thường đã có ở phần Video)
+        if not pygame.mixer.get_init():
+            pygame.mixer.init()
+
+        # Nạp hiệu ứng âm thanh Jackpot
+        self.jackpot_sound = None
+        sound_path = os.path.join(os.path.dirname(__file__), "..", "..", "jackpot.wav")
+        if os.path.exists(sound_path):
+            try:
+                self.jackpot_sound = pygame.mixer.Sound(sound_path)
+                # Bạn có thể chỉnh âm lượng (0.0 đến 1.0)
+                self.jackpot_sound.set_volume(0.7)
+            except Exception as e:
+                print(f"Error loading jackpot sound: {e}")
+
         self._board_bgs = {
             "manual": _load_bg("board_bg_manual.jpg"),
             "ucs":    _load_bg("board_bg_ucs.jpg"),
@@ -202,6 +232,8 @@ class FreeCellApp:
             "bfs":    _load_bg("board_bg_bfs.jpg"),
             "dfs":    _load_bg("board_bg_dfs.jpg"),
         }
+        ai_bg = _load_bg("ai_bg.jpg")  
+        self._ai_bg = ai_bg
 
         # Khởi tạo các màn hình với dữ liệu đã nạp
         self.menu = MenuScreen(
@@ -265,6 +297,91 @@ class FreeCellApp:
         self.current_hint = None
         self._a_star_session: AStarSearchSession | None = None
 
+
+    def _go_ai_select(self) -> None:
+        self.scene = "ai_select"
+        self._switch_to_menu_screen()
+
+    def _draw_poker_chip(self, name: str, center: tuple, radius: int, color: tuple, is_hover: bool):
+        """Vẽ một con chip Poker 3D với họa tiết viền."""
+        GOLD = (212, 175, 55)
+        WHITE = (255, 255, 255)
+        
+        # 1. Vẽ bóng đổ (Shadow) để tạo độ nổi
+        pygame.draw.circle(self.screen, (20, 20, 20), (center[0] + 4, center[1] + 4), radius)
+        
+        # 2. Vẽ thân chip (Base) - Sáng hơn nếu đang di chuột (hover)
+        base_color = tuple(min(255, c + 40) for c in color) if is_hover else color
+        pygame.draw.circle(self.screen, base_color, center, radius)
+        
+        # 3. Vẽ 6 họa tiết vạch trắng đặc trưng quanh viền (Dashes)
+        import math
+        for i in range(6):
+            angle = math.radians(i * 60 + (pygame.time.get_ticks() * 0.05 if is_hover else 0))
+            # Vẽ vạch trắng nhỏ sát mép
+            for offset in [-0.1, 0.1]: # Tạo độ dày cho vạch
+                p1 = (center[0] + (radius - 12) * math.cos(angle + offset), 
+                      center[1] + (radius - 12) * math.sin(angle + offset))
+                p2 = (center[0] + radius * math.cos(angle + offset), 
+                      center[1] + radius * math.sin(angle + offset))
+                pygame.draw.line(self.screen, WHITE, p1, p2, width=8)
+
+        # 4. Vẽ vòng nhẫn Gold bên trong (Inlay)
+        pygame.draw.circle(self.screen, GOLD, center, radius, width=3)
+        pygame.draw.circle(self.screen, GOLD, center, int(radius * 0.75), width=2)
+
+        # 5. Vẽ tên thuật toán (Sử dụng font Palatino đã nạp)
+        # Chữ sẽ có bóng đổ nhẹ để dễ đọc
+        lbl_shad = self.menu_font.render(name, True, (0, 0, 0))
+        lbl      = self.menu_font.render(name, True, WHITE)
+        
+        lx = center[0] - lbl.get_width() // 2
+        ly = center[1] - lbl.get_height() // 2
+        self.screen.blit(lbl_shad, (lx + 2, ly + 2))
+        self.screen.blit(lbl, (lx, ly))
+
+    def _draw_ai_selector(self) -> None:
+        w, h = self.screen.get_width(), self.screen.get_height()
+
+        # Vẽ nền (Background bài lá của bạn)
+        if self._ai_bg:
+            bg = pygame.transform.scale(self._ai_bg, (w, h))
+            self.screen.blit(bg, (0, 0))
+        
+        algos = [
+            ("UCS", (190, 80, 30)),   # Cam
+            ("A*",  (140, 20, 20)),   # Đỏ đô
+            ("BFS", (10, 10, 15)),    # Đen/Xanh đậm
+            ("DFS", (80, 40, 130)),   # Tím
+        ]
+        
+        radius = 90  # Bán kính con chip
+        gap = 25    # Khoảng cách giữa các chip
+        mp = pygame.mouse.get_pos()
+
+        # Tính toán để căn giữa cụm chip theo chiều dọc
+        total_h = len(algos) * (radius * 2) + (len(algos) - 1) * gap
+        start_y = h // 2 - total_h // 2 + radius
+
+        for i, (name, color) in enumerate(algos):
+            # Bạn có thể cho các chip hơi so le (zig-zag) cho tự nhiên
+            offset_x = 40 if i % 2 == 0 else -40 
+            center = (w // 2 + offset_x, start_y + i * (radius * 2 + gap))
+            
+            # Kiểm tra va chạm hình tròn (Dùng công thức khoảng cách)
+            dist = math.hypot(mp[0] - center[0], mp[1] - center[1])
+            is_hover = dist < radius
+            
+            self._draw_poker_chip(name, center, radius, color, is_hover)
+
+        # Back button
+        back_rect = pygame.Rect(24, h - 70, 140, 46)
+        fill = (175,40,40) if back_rect.collidepoint(mp) else (140,25,25)
+        pygame.draw.rect(self.screen, fill, back_rect, border_radius=10)
+        pygame.draw.rect(self.screen, GOLD, back_rect, width=2, border_radius=10)
+        lbl = self.hint_font.render("Back", True, GOLD_L)
+        self.screen.blit(lbl, (back_rect.centerx - lbl.get_width()//2,
+                                back_rect.centery - lbl.get_height()//2))
 
     def _solver_renders_partial_progress(self) -> bool:
         return self.solver_algorithm != "a_star"
@@ -330,6 +447,7 @@ class FreeCellApp:
             if self.scene == "game":
                 self._refresh_game_flags()
 
+            self._update_victory_logic()
             self._draw()
             pygame.display.flip()
             self.clock.tick(60)
@@ -354,6 +472,7 @@ class FreeCellApp:
                     event,
                     on_start_game=self._start_manual_game,
                     on_start_solver=lambda algo="ucs": self._start_solver_game(algo),
+                    on_ai_select=self._go_ai_select,   # ← thêm
                     on_howto=self._go_howto,
                     on_exit=self._trigger_exit,
                 )
@@ -369,6 +488,31 @@ class FreeCellApp:
                 )
             elif self.scene == "howto":
                 self.howto_screen.handle_event(event, on_back=self._go_menu)
+            elif self.scene == "ai_select":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    w, h = self.screen.get_width(), self.screen.get_height()
+                    back_rect = pygame.Rect(24, h - 70, 140, 46)
+                    
+                    # 2. Kiểm tra nếu nhấn vào nút Back
+                    if back_rect.collidepoint(event.pos):
+                        # Sử dụng hiệu ứng chuyển cảnh để quay về Menu cho chuyên nghiệp
+                        self._go_menu()
+                        return
+
+                    radius = 90
+                    gap = 25
+                    total_h = 4 * (radius * 2) + 3 * gap
+                    start_y = h // 2 - total_h // 2 + radius
+                    
+                    algos = ["ucs", "a_star", "bfs", "dfs"]
+                    for i, algo in enumerate(algos):
+                        offset_x = 40 if i % 2 == 0 else -40
+                        center = (w // 2 + offset_x, start_y + i * (radius * 2 + gap))
+                        
+                        # Sử dụng công thức khoảng cách Euclide: distance <= radius
+                        if math.hypot(event.pos[0] - center[0], event.pos[1] - center[1]) <= radius:
+                            self._start_solver_game(algo)
+                            return
             else:
                 self._on_game_event(event)
 
@@ -940,10 +1084,16 @@ class FreeCellApp:
         elif self.scene == "game":
             self.board.draw(self.screen)
             self._draw_game_hud()
+            self._draw_victory_celebration()
+        elif self.scene == "ai_select":
+            self._draw_ai_selector()
 
     def _draw_game_hud(self) -> None:
+        h = self.screen.get_height()
+        
         hint = self.hint_font.render("ESC: Menu   |   R: New Shuffle", True, (255, 250, 205))
-        self.screen.blit(hint, (18, self.screen.get_height() - hint.get_height() - 14))
+        # Luôn cách đáy màn hình 14px
+        self.screen.blit(hint, (18, h - hint.get_height() - 14))
 
         if self.is_animating:
             progress = self.hint_font.render(
@@ -979,3 +1129,74 @@ class FreeCellApp:
         is_won = self.view_model["is_goal"]
         has_moves = len(self.view_model.get("legal_moves", [])) > 0
         self.is_stuck = (not is_won) and (not has_moves)
+
+    def _spawn_victory_particles(self):
+        """Tạo ra các đồng xu vàng ngẫu nhiên ở cạnh trên màn hình."""
+        import random
+        w = self.screen.get_width()
+        for _ in range(5): # Mỗi frame tạo 5 đồng xu
+            self.particles.append({
+                "pos": [random.randint(0, w), -20],
+                "vel": [random.uniform(-2, 2), random.uniform(5, 12)],
+                "color": random.choice([(212, 175, 55), (255, 223, 100)]), # GOLD và GOLD_L
+                "size": random.randint(6, 12)
+            })
+
+    def _update_victory_logic(self):
+        """Cập nhật vị trí tiền rơi và kiểm tra thời gian quay về menu."""
+        if not rules.is_goal(self.game.get_state()):
+            return
+
+        # Khi victory_timer bắt đầu từ 0 sang 1, tức là khoảnh khắc vừa thắng
+        if self.victory_timer == 0 and self.jackpot_sound:
+            self.jackpot_sound.play() # Phát tiếng tiền đổ loảng xoảng
+
+        self.victory_timer += 1
+        self._spawn_victory_particles()
+
+        # Cập nhật tọa độ từng hạt
+        for p in self.particles[:]:
+            p["pos"][0] += p["vel"][0]
+            p["pos"][1] += p["vel"][1]
+            if p["pos"][1] > self.screen.get_height():
+                self.particles.remove(p)
+
+        # Sau khoảng 5 giây (300 frames tại 60FPS), tự động về menu
+        if self.victory_timer > 300:
+            self.victory_timer = 0
+            self.particles = []
+            self._go_menu()
+
+    def _draw_victory_celebration(self):
+        """Vẽ hiệu ứng tiền rơi và Popup chúc mừng."""
+        if self.victory_timer <= 0:
+            return
+
+        # 1. Vẽ mưa tiền xu
+        for p in self.particles:
+            pygame.draw.circle(self.screen, p["color"], (int(p["pos"][0]), int(p["pos"][1])), p["size"])
+            pygame.draw.circle(self.screen, (0, 0, 0), (int(p["pos"][0]), int(p["pos"][1])), p["size"], 1)
+
+        # 2. Vẽ Popup JACKPOT ở giữa màn hình
+        w, h = self.screen.get_size()
+        pop_w, pop_h = 600, 200
+        px, py = (w - pop_w) // 2, (h - pop_h) // 2
+
+        # Đổ bóng 3D cho Popup
+        pygame.draw.rect(self.screen, (20, 20, 20), (px + 10, py + 10, pop_w, pop_h), border_radius=20)
+        # Thân Popup màu Đỏ đô (BURGUNDY) sang trọng
+        pygame.draw.rect(self.screen, (144, 0, 32), (px, py, pop_w, pop_h), border_radius=20)
+        # Viền Vàng (GOLD)
+        pygame.draw.rect(self.screen, (212, 175, 55), (px, py, pop_w, pop_h), width=5, border_radius=20)
+
+        # Vẽ chữ rực rỡ
+        import math
+        # Hiệu ứng chữ nhấp nháy theo thời gian
+        glow = int(155 + 100 * math.sin(self.victory_timer * 0.2))
+        text_color = (255, glow, 100)
+        
+        title_surf = self.title_font.render("JACKPOT!", True, text_color)
+        sub_surf = self.menu_font.render("YOU CLEARED THE BOARD", True, (255, 255, 255))
+
+        self.screen.blit(title_surf, (w // 2 - title_surf.get_width() // 2, py + 40))
+        self.screen.blit(sub_surf, (w // 2 - sub_surf.get_width() // 2, py + 120))
