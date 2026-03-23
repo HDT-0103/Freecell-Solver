@@ -295,12 +295,7 @@ class BoardRenderer:
         self._drag_info    = None
         self._drag_widgets = []
         self._drag_anchor  = None
-
-        for col in self.state.cascades:
-            for card_data in col:
-                self._ensure_widget(card_data)
-
-        self.sync_positions()
+        self.apply_state(self.state)
 
     def _ensure_widget(self, data: Card) -> CardWidget:
         if data not in self._widgets:
@@ -357,20 +352,7 @@ class BoardRenderer:
 
     def update_state(self, state: State) -> None:
         """Update the internal state to a new State."""
-        self.state = state.clone()
-        
-        # Ensure all widgets exist for new state before syncing positions
-        for card_data in self.state.free_cells:
-            if card_data:
-                self._ensure_widget(card_data)
-        for suit in ("C", "D", "H", "S"):
-            for rank in range(1, self.state.foundations[suit] + 1):
-                self._ensure_widget(Card(rank=rank, suit=suit))
-        for cascade in self.state.cascades:
-            for card_data in cascade:
-                self._ensure_widget(card_data)
-                
-        self.sync_positions()
+        self.apply_state(state)
 
     def get_card_positions(self, state: State) -> Dict[Card, Tuple[int, int]]:
         """Return pixel positions for every card in a given snapshot state."""

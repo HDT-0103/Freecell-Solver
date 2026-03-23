@@ -17,16 +17,12 @@ except ImportError:
 from config import CARD_IMAGE_DIR, SOLUTION_DIR
 from core import FreeCellGame, rules
 from core.loader import load_game_from_json
-from core.state import State
 from gui.animation import SolverAnimator
 from gui.hud import draw_solver_stats, draw_win_or_lose_overlay
 from gui.interface import BoardRenderer, CardImageLoader
 from gui.menu import MenuScreen
 from solvers.ucs import Move as HintMove, UCSSearchResult, get_hint, solve_ucs
-try:
-    from solvers.a_star import solve_a_star
-except ImportError:
-    solve_a_star = None
+from solvers.a_star import AStarResult, AStarSearchSession, solve_a_star
 try:
     from solvers.bfs import solve_bfs
 except ImportError:
@@ -35,6 +31,8 @@ try:
     from solvers.dfs import solve_dfs
 except ImportError:
     solve_dfs = None
+
+SolverResult = UCSSearchResult | AStarResult
 
 
 class FreeCellApp:
@@ -234,24 +232,19 @@ class FreeCellApp:
         self.ai_solver_mode = False
         self._ai_total_applied_moves = 0
 
-        self._ai_seen_states: set[tuple] = set()
-        self._sample_games_by_difficulty = self._discover_sample_games_by_difficulty()
-        self._sample_game_indices = {
-            difficulty: 0 for difficulty in self._sample_games_by_difficulty
-        }
-        self.selected_easy_game_index = 0
-        self.selected_manual_difficulty = "easy"
-        self._ai_game_path = self._discover_ai_game()
+        self._sample_game_files = self._discover_sample_games()
+        self._sample_game_indices = {"all": 0, "easy": 0, "hard": 0}
         self.last_loaded_sample: str | None = None
 
-        self.solver_result: UCSSearchResult | None = None
+        self.solver_result: SolverResult | None = None
         self.solver_message = ""
-        self.current_hint: HintMove | None = None
+        self.solver_algorithm = "ucs"
+        self.solver_label = "UCS"
 
         self._solver_thread: threading.Thread | None = None
         self._solver_job_id = 0
         self._solver_pending = False
-        self._solver_async_result: UCSSearchResult | None = None
+        self._solver_async_result: SolverResult | None = None
         self._solver_async_error: str | None = None
         self._solver_stages = [
             (120_000, 6.0),
@@ -260,12 +253,25 @@ class FreeCellApp:
             (900_000, 28.0),
         ]
         self._solver_stage_idx = 0
-        self._hint_thread: threading.Thread | None = None
-        self._hint_job_id = 0
-        self._hint_pending = False
-        self._hint_async_result: HintMove | None = None
-        self._hint_async_error: str | None = None
+        self._a_star_session: AStarSearchSession | None = None
 
+
+    def _solver_renders_partial_progress(self) -> bool:
+        return self.solver_algorithm != "a_star"
+
+    def _current_solver_stage(self) -> tuple[int, float]:
+        if self.solver_algorithm == "a_star":
+            a_star_stages = [
+                (250_000, 10.0),
+                (500_000, 20.0),
+                (1_000_000, 35.0),
+                (2_000_000, 50.0),
+            ]
+            stage_idx = min(self._solver_stage_idx, len(a_star_stages) - 1)
+            return a_star_stages[stage_idx]
+
+        stage_idx = min(self._solver_stage_idx, len(self._solver_stages) - 1)
+        return self._solver_stages[stage_idx]
 
     def run(self) -> None:
         if self.scene == "intro" and self.video_clip is not None:
@@ -291,35 +297,25 @@ class FreeCellApp:
 
             self._handle_events()
             self._poll_solver_result()
-            self._poll_hint_result()
 
             if self.scene == "game":
                 was_active = self.animator.status.active
                 self.animator.update(self.board)
                 self.is_animating = self.animator.is_animating
                 if was_active and not self.animator.status.active and self.animator.status.finished:
+                    self.game.set_state(self.board.state.clone())
                     if self.ai_solver_mode:
                         self._ai_total_applied_moves += self.animator.status.applied_moves
-                    # Keep core state in sync with the board after auto-play animation.
-                    # Without this, UCS restarts from a stale snapshot and loops forever.
-                    self.game.set_state(self.board.state.clone())
-                    self.view_model = self.game.get_view_model()
-                    if self.solver_result and self.ai_solver_mode:
-                        # Metrics should show the full auto-play sequence, not only the last UCS stage.
-                        self.solver_result.metrics.solution_steps = self._ai_total_applied_moves
+
                     if self.animator.status.failed:
                         self.solver_message = "Animation failed due to an invalid transition."
-                    elif self.view_model.get("is_goal", False):
-                        self.solver_message = "AI Solver completed: you win!"
+                    elif rules.is_goal(self.game.get_state()):
+                        self.solver_message = f"{self.solver_label} completed: you win!"
+                    elif self.ai_solver_mode and not self._solver_pending:
+                        self.solver_message = f"{self.solver_label}: continuing search..."
+                        self._launch_solver_async()
                     else:
-                        if self.ai_solver_mode:
-                            if not self._solver_pending:
-                                self.solver_message = "AI Solver: continuing search..."
-                                self._launch_solver_async()
-                        elif self._start_next_ai_local_step():
-                            self.solver_message = "AI Solver auto-playing..."
-                        else:
-                            self.solver_message = "AI Solver: replay finished."
+                        self.solver_message = f"{self.solver_label}: replay finished."
 
             if self.scene == "game":
                 self._refresh_game_flags()
@@ -370,7 +366,6 @@ class FreeCellApp:
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 self._cancel_pending_solver()
-                self._cancel_pending_hint()
                 self.animator.clear()
                 self.is_animating = False
                 self.ai_solver_mode = False
@@ -379,33 +374,38 @@ class FreeCellApp:
                 self._go_menu()
             elif event.key == pygame.K_h and not self.ai_solver_mode and not self.animator.status.active:
                 self._request_hint()
+            elif event.key == pygame.K_r:
+                self._cancel_pending_solver()
+                self.game.new_game()
+                self.board.state = self.game.get_state().clone()
+                self.board.on_reset()
+                self.animator.clear()
+                self.is_animating = False
+                self.ai_solver_mode = False
+                self._ai_total_applied_moves = 0
+                self.solver_result = None
+                self.solver_message = ""
+                self._refresh_game_flags()
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if not self.ai_solver_mode and not self.is_stuck and not self.animator.status.active:
-                self._cancel_pending_hint()
-                self._clear_hint()
                 self.board.on_mouse_down(event.pos)
 
         if event.type == pygame.MOUSEMOTION and (not self.ai_solver_mode) and (not self.animator.status.active):
             self.board.on_mouse_motion(event.pos)
 
         if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-            # Always allow releasing a dragged card, even if a temporary "stuck"
-            # flag was raised while the card is in hand.
-            if not self.ai_solver_mode and not self.animator.status.active:
+            if not self.ai_solver_mode and not self.is_stuck and not self.animator.status.active:
                 moved = self.board.on_mouse_up(event.pos)
                 if moved:
-                    self._cancel_pending_hint()
-                    self._clear_hint()
-                    self._update_game_from_state()
                     self._refresh_game_flags()
 
     def _start_manual_game(self, difficulty: str) -> None:
+        self._cancel_pending_solver()
         self.animator.clear()
         self.is_animating = False
         self.ai_solver_mode = False
         self._ai_total_applied_moves = 0
-        self._ai_seen_states.clear()
         self.solver_result = None
         self.solver_message = ""
         self._cancel_pending_hint()
@@ -429,13 +429,15 @@ class FreeCellApp:
             self._switch_to_game_screen()
             self.scene = "game"
             return
+        self.solver_algorithm = "ucs"
+        self.solver_label = "UCS"
 
         loaded = self._load_next_sample_game(difficulty)
         if loaded:
             self.solver_message = f"Loaded {difficulty.title()} sample: {self.last_loaded_sample}"
         else:
-            self.game.new_game(seed=None)
-            self._update_game_from_state()
+            self.game.new_game()
+            self.board.state = self.game.get_state().clone()
             self.board.on_reset()
             self._refresh_game_flags()
             self.solver_message = f"No {difficulty.title()} sample deals found. Started a random shuffle."
@@ -495,17 +497,24 @@ class FreeCellApp:
         self._cancel_pending_hint()
         self._clear_hint()
         self._solver_algorithm = algorithm  # lưu lại để _launch_solver_async dùng
+        self._a_star_session = None
+        self.solver_algorithm = algorithm
+        self.solver_label = "A*" if algorithm == "a_star" else algorithm.upper()
 
-        loaded = self._load_ai_game()
+        loaded = self._load_next_sample_game("easy")
         if not loaded:
-            self.game.new_game(seed=None)
-            self._update_game_from_state()
+            loaded = self._load_next_sample_game()
+        if not loaded:
+            self.game.new_game()
+            self.board.state = self.game.get_state().clone()
             self.board.on_reset()
             self._refresh_game_flags()
             self.solver_message = f"AI Solver ({algorithm.upper()}) sample not found. Started a random shuffle."
         else:
             self.solver_message = f"AI Solver ({algorithm.upper()}): loaded {self.last_loaded_sample}, searching..."
 
+        self.board.set_board_bg(self._board_bgs.get(algorithm))
+        self._switch_to_game_screen()
         self.board.set_board_bg(self._board_bgs.get(algorithm))
         self._switch_to_game_screen()
         self.scene = "game"
@@ -516,17 +525,26 @@ class FreeCellApp:
             return
 
         snapshot = self.game.get_state().clone()
-        stage_idx = min(self._solver_stage_idx, len(self._solver_stages) - 1)
-        max_nodes, max_time_seconds = self._solver_stages[stage_idx]
+        max_nodes, max_time_seconds = self._current_solver_stage()
         self._solver_job_id += 1
         job_id = self._solver_job_id
         self._solver_pending = True
 
         def worker() -> None:
             try:
-                algo = getattr(self, "_solver_algorithm", "ucs")
-                if algo == "a_star" and solve_a_star:
-                    result = solve_a_star(snapshot, max_nodes=max_nodes, max_time_seconds=max_time_seconds)
+                algo = getattr(self, "solver_algorithm", "ucs")
+                if algo == "a_star":
+                    session = self._a_star_session
+                    if session is None:
+                        session = AStarSearchSession(
+                            snapshot,
+                            heuristic="blocking",
+                            heuristic_weight=3.0,
+                        )
+                    result = session.advance(
+                        max_nodes=max_nodes,
+                        max_time_seconds=max_time_seconds,
+                    )
                 elif algo == "bfs" and solve_bfs:
                     result = solve_bfs(snapshot, max_nodes=max_nodes, max_time_seconds=max_time_seconds)
                 elif algo == "dfs" and solve_dfs:
@@ -534,6 +552,11 @@ class FreeCellApp:
                 else:
                     result = solve_ucs(snapshot, max_nodes=max_nodes, max_time_seconds=max_time_seconds)
                 if self._solver_job_id == job_id:
+                    if algo == "a_star":
+                        self._a_star_session = session
+                if self._solver_job_id == job_id:
+                    if self.solver_algorithm == "a_star":
+                        self._a_star_session = session
                     self._solver_async_result = result
             except Exception as exc:
                 if self._solver_job_id == job_id:
@@ -547,58 +570,7 @@ class FreeCellApp:
         self._solver_pending = False
         self._solver_async_result = None
         self._solver_async_error = None
-
-    def _request_hint(self) -> None:
-        if self._hint_pending:
-            self.solver_message = "Hint: still analyzing current position..."
-            return
-
-        self._clear_hint()
-        snapshot = self.game.get_state().clone()
-        self._hint_job_id += 1
-        job_id = self._hint_job_id
-        self._hint_pending = True
-        self.solver_message = "Hint: analyzing current position..."
-
-        def worker() -> None:
-            try:
-                result = get_hint(snapshot, max_depth=5, max_nodes=8_000, max_time_seconds=0.25)
-                if self._hint_job_id == job_id:
-                    self._hint_async_result = result
-            except Exception as exc:
-                if self._hint_job_id == job_id:
-                    self._hint_async_error = str(exc)
-
-        self._hint_thread = threading.Thread(target=worker, daemon=True)
-        self._hint_thread.start()
-
-    def _cancel_pending_hint(self) -> None:
-        self._hint_job_id += 1
-        self._hint_pending = False
-        self._hint_async_result = None
-        self._hint_async_error = None
-
-    def _update_game_from_state(self) -> None:
-        """Update renderer state from FreeCellGame state."""
-        self.board.update_state(self.game.get_state())
-
-    def _poll_hint_result(self) -> None:
-        if not self._hint_pending:
-            return
-
-        if self._hint_async_error:
-            self._hint_pending = False
-            self.solver_message = f"Hint error: {self._hint_async_error}"
-            self._hint_async_error = None
-            return
-
-        if self._hint_async_result is None and self._hint_thread is not None and self._hint_thread.is_alive():
-            return
-
-        hint = self._hint_async_result
-        self._hint_async_result = None
-        self._hint_pending = False
-        self._show_hint(hint)
+        self._a_star_session = None
 
     def _poll_solver_result(self) -> None:
         if not self._solver_pending:
@@ -606,7 +578,7 @@ class FreeCellApp:
 
         if self._solver_async_error:
             self._solver_pending = False
-            self.solver_message = f"AI Solver error: {self._solver_async_error}"
+            self.solver_message = f"{self.solver_label} error: {self._solver_async_error}"
             self._solver_async_error = None
             return
 
@@ -621,69 +593,87 @@ class FreeCellApp:
         if result.solved:
             self._solver_stage_idx = 0
             name = self.last_loaded_sample or "random shuffle"
-            total_steps = self._ai_total_applied_moves + result.metrics.solution_steps
-            result.metrics.solution_steps = total_steps
-            self.solver_message = (
-                f"AI Solver: {name} - "
-                f"{total_steps} steps, "
-                f"{result.metrics.elapsed_seconds:.2f}s"
-            )
+            if isinstance(result, UCSSearchResult):
+                total_steps = self._ai_total_applied_moves + result.metrics.solution_steps
+                result.metrics.solution_steps = total_steps
+                self.solver_message = (
+                    f"{self.solver_label}: {name} - "
+                    f"{total_steps} steps, "
+                    f"{result.metrics.elapsed_seconds:.2f}s"
+                )
+            else:
+                total_steps = self._ai_total_applied_moves + len(result.moves)
+                self.solver_message = (
+                    f"{self.solver_label}: {name} - "
+                    f"{total_steps} steps, "
+                    f"{result.expanded_nodes} expanded"
+                )
             self.animator.animate_solution(result.state_path)
             self.is_animating = True
             return
 
         self._solver_stage_idx = min(self._solver_stage_idx + 1, len(self._solver_stages) - 1)
-        if len(result.state_path) > 1:
+        if self._solver_renders_partial_progress() and len(result.state_path) > 1:
             self._solver_stage_idx = 0
             self.animator.animate_solution(result.state_path)
             self.is_animating = True
-            self.solver_message = f"AI Solver: advanced {len(result.state_path) - 1} moves - continuing..."
+            self.solver_message = (
+                f"{self.solver_label}: advanced {len(result.state_path) - 1} moves - continuing..."
+            )
             return
 
-        self.solver_message = (
-            f"AI Solver: searching deeper "
-            f"({result.metrics.expanded_nodes} nodes, {result.metrics.elapsed_seconds:.1f}s)..."
-        )
+        if isinstance(result, UCSSearchResult):
+            self.solver_message = (
+                f"{self.solver_label}: searching deeper "
+                f"({result.metrics.expanded_nodes} nodes, {result.metrics.elapsed_seconds:.1f}s)..."
+            )
+        else:
+            if self._a_star_session is not None and self._a_star_session.exhausted:
+                self.solver_message = f"{self.solver_label}: no solution found from this state."
+                return
+            self.solver_message = (
+                f"{self.solver_label}: still searching for full solution "
+                f"({result.expanded_nodes} expanded, {result.generated_nodes} generated)..."
+            )
         self._launch_solver_async()
 
-    def _discover_sample_games_by_difficulty(self) -> Dict[str, List[str]]:
-        return {
-            difficulty: self._discover_games_for_difficulty(difficulty)
-            for difficulty in ("easy", "medium", "hard")
-        }
-
-    def _discover_games_for_difficulty(self, difficulty: str) -> List[str]:
-        difficulty_dir = os.path.join(SOLUTION_DIR, difficulty)
-        if not os.path.isdir(difficulty_dir):
+    def _discover_sample_games(self) -> List[str]:
+        if not os.path.isdir(SOLUTION_DIR):
             return []
 
         pattern = re.compile(r"^game_\d+\.json$", re.IGNORECASE)
         files: List[str] = []
-        for name in os.listdir(difficulty_dir):
-            if pattern.match(name):
-                files.append(os.path.join(difficulty_dir, name))
+        for root, _, names in os.walk(SOLUTION_DIR):
+            for name in names:
+                if pattern.match(name):
+                    files.append(os.path.join(root, name))
         files.sort()
         return files
 
-    def _discover_ai_game(self) -> str | None:
-        ai_game_path = os.path.join(SOLUTION_DIR, "easy", "game_01.json")
-        if os.path.isfile(ai_game_path):
-            return ai_game_path
-        return None
+    def _load_next_sample_game(self, difficulty: str | None = None) -> bool:
+        if difficulty is None:
+            files = self._sample_game_files
+            key = "all"
+        else:
+            key = difficulty.lower()
+            files = [
+                file_path
+                for file_path in self._sample_game_files
+                if os.path.basename(os.path.dirname(file_path)).lower() == key
+            ]
 
-    def _load_next_sample_game(self, difficulty: str) -> bool:
-        files = self._sample_games_by_difficulty.get(difficulty, [])
         if not files:
             return False
 
-        sample_idx = self._sample_game_indices.get(difficulty, 0)
+        sample_idx = self._sample_game_indices.get(key, 0)
         file_path = files[sample_idx % len(files)]
-        self._sample_game_indices[difficulty] = (sample_idx + 1) % len(files)
+        self._sample_game_indices[key] = (sample_idx + 1) % len(files)
+
         ok = load_game_from_json(file_path, self.game)
         if ok:
-            self.last_loaded_sample = os.path.join(difficulty, os.path.basename(file_path))
-            self._update_game_from_state()
+            self.board.state = self.game.get_state().clone()
             self.board.on_reset()
+            self.last_loaded_sample = os.path.relpath(file_path, SOLUTION_DIR)
             self._refresh_game_flags()
         return ok
 
@@ -907,11 +897,6 @@ class FreeCellApp:
             pass  # Do not draw game UI when playing video
         elif self.scene == "menu":
             self.menu.draw_menu()
-        elif self.scene == "easy_select":
-            self.menu.draw_easy_selector(
-                self._sample_games_by_difficulty.get("easy", []),
-                self.selected_easy_game_index,
-            )
         elif self.scene == "howto":
             self.howto_screen.draw()
         elif self.scene == "game":
@@ -919,17 +904,12 @@ class FreeCellApp:
             self._draw_game_hud()
 
     def _draw_game_hud(self) -> None:
-        if self.ai_solver_mode:
-            hint_text = "ESC: Menu"
-        else:
-            hint_text = "ESC: Menu   |   H: Hint"
-            
-        hint = self.hint_font.render(hint_text, True, (255, 250, 205))
+        hint = self.hint_font.render("ESC: Menu   |   R: New Shuffle", True, (255, 250, 205))
         self.screen.blit(hint, (18, self.screen.get_height() - hint.get_height() - 14))
 
         if self.is_animating:
             progress = self.hint_font.render(
-                f"AI Auto-play: {self.animator.status.applied_moves}/{self.animator.status.total_moves}",
+                f"{self.solver_label} Auto-play: {self.animator.status.applied_moves}/{self.animator.status.total_moves}",
                 True,
                 (255, 250, 180),
             )
@@ -938,10 +918,13 @@ class FreeCellApp:
             msg = self.hint_font.render(self.solver_message, True, (255, 245, 180))
             self.screen.blit(msg, (18, 16))
 
-        is_won = self.view_model.get("is_goal", False)
+        if self.ai_solver_mode and not self.is_animating and not rules.is_goal(self.game.get_state()):
+            lock = self.hint_font.render("AI Solver mode: manual card movement is disabled.", True, (255, 236, 170))
+            self.screen.blit(lock, (18, 48))
 
-        if self.solver_result and (
-            is_won and (self.animator.status.finished or self.solver_result.metrics.solution_steps == 0)
+        if isinstance(self.solver_result, UCSSearchResult) and (
+            rules.is_goal(self.game.get_state())
+            and (self.animator.status.finished or self.solver_result.metrics.solution_steps == 0)
         ):
             draw_solver_stats(self.screen, self.hint_font, self.body_font, self.solver_result)
 
@@ -949,7 +932,7 @@ class FreeCellApp:
             self.screen,
             self.title_font,
             self.hint_font,
-            is_won,
+            self.game.get_state(),
             self.is_stuck,
         )
 
