@@ -105,6 +105,8 @@ class FreeCellApp:
         self.clock = pygame.time.Clock()
         self.running = True
         self.scene = "menu"
+        self.selected_easy_game_index = 0
+        self.selected_manual_difficulty = "easy"
 
         self.title_font = pygame.font.SysFont("georgia", 64, bold=True)
         self.menu_font = pygame.font.SysFont("georgia", 36, bold=True)
@@ -233,6 +235,7 @@ class FreeCellApp:
         self._ai_total_applied_moves = 0
 
         self._sample_game_files = self._discover_sample_games()
+        self._sample_games_by_difficulty = self._discover_sample_games_by_difficulty() 
         self._sample_game_indices = {"all": 0, "easy": 0, "hard": 0}
         self.last_loaded_sample: str | None = None
 
@@ -253,6 +256,13 @@ class FreeCellApp:
             (900_000, 28.0),
         ]
         self._solver_stage_idx = 0
+        self._ai_seen_states: set[tuple] = set()
+        self._hint_thread: threading.Thread | None = None
+        self._hint_job_id = 0
+        self._hint_pending = False
+        self._hint_async_result = None
+        self._hint_async_error = None
+        self.current_hint = None
         self._a_star_session: AStarSearchSession | None = None
 
 
@@ -572,6 +582,16 @@ class FreeCellApp:
         self._solver_async_error = None
         self._a_star_session = None
 
+    def _cancel_pending_hint(self) -> None:
+        self._hint_job_id += 1
+        self._hint_pending = False
+        self._hint_async_result = None
+        self._hint_async_error = None
+
+    def _clear_hint(self) -> None:
+        self.current_hint = None
+        self.board.set_highlighted_card(None)
+
     def _poll_solver_result(self) -> None:
         if not self._solver_pending:
             return
@@ -649,6 +669,15 @@ class FreeCellApp:
                     files.append(os.path.join(root, name))
         files.sort()
         return files
+
+    def _discover_sample_games_by_difficulty(self) -> dict:
+        result = {}
+        for file_path in self._sample_game_files:
+            difficulty = os.path.basename(os.path.dirname(file_path)).lower()
+            result.setdefault(difficulty, []).append(file_path)
+        for key in result:
+            result[key].sort()
+        return result
 
     def _load_next_sample_game(self, difficulty: str | None = None) -> bool:
         if difficulty is None:
@@ -892,11 +921,20 @@ class FreeCellApp:
             self.video_clip.close()
             self.video_clip = None
 
+    def _update_game_from_state(self) -> None:
+        self.board.state = self.game.get_state().clone()
+        self.board.on_reset()
+
     def _draw(self) -> None:
         if self.scene in ("intro", "outro"):
             pass  # Do not draw game UI when playing video
         elif self.scene == "menu":
             self.menu.draw_menu()
+        elif self.scene == "easy_select":          
+            self.menu.draw_easy_selector(
+                self._sample_games_by_difficulty.get("easy", []),
+                self.selected_easy_game_index,
+            )
         elif self.scene == "howto":
             self.howto_screen.draw()
         elif self.scene == "game":
