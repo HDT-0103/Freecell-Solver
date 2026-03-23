@@ -91,18 +91,34 @@ class MenuScreen:
         ]
         self.manual_dropdown_max_h = len(self.manual_option_buttons) * 50 + (len(self.manual_option_buttons) - 1) * 8
 
-        self.solver_dropdown_max_h = 54
-        self.ucs_option_button = Button(
-            text="UCS",
-            rect=pygame.Rect(
-                self.solver_button.rect.left,
-                self.solver_button.rect.bottom + 6,
-                self.solver_button.rect.width,
-                54,
+        self.solver_option_buttons = [
+            Button(
+                text="UCS",
+                rect=pygame.Rect(
+                    self.solver_button.rect.left,
+                    self.solver_button.rect.bottom + 6,
+                    self.solver_button.rect.width,
+                    54,
+                ),
+                base_color=(34, 121, 73),
+                hover_color=(45, 147, 88),
+                text_color=(251, 250, 219),
             ),
-            base_color=(34, 121, 73),
-            hover_color=(45, 147, 88),
-            text_color=(251, 250, 219),
+            Button(
+                text="A*",
+                rect=pygame.Rect(
+                    self.solver_button.rect.left,
+                    self.solver_button.rect.bottom + 68,
+                    self.solver_button.rect.width,
+                    54,
+                ),
+                base_color=(46, 98, 162),
+                hover_color=(61, 119, 191),
+                text_color=(248, 250, 221),
+            ),
+        ]
+        self.solver_dropdown_max_h = (
+            len(self.solver_option_buttons) * 54 + (len(self.solver_option_buttons) - 1) * 8
         )
 
         self.easy_page_size = 6
@@ -220,9 +236,10 @@ class MenuScreen:
             button.rect.width = self.start_button.rect.width
             button.rect.y = self.start_button.rect.bottom + 6 + idx * (button.rect.height + 8)
 
-        self.ucs_option_button.rect.x = self.solver_button.rect.x
-        self.ucs_option_button.rect.width = self.solver_button.rect.width
-        self.ucs_option_button.rect.y = self.solver_button.rect.bottom + 6
+        for idx, button in enumerate(self.solver_option_buttons):
+            button.rect.x = self.solver_button.rect.x
+            button.rect.width = self.solver_button.rect.width
+            button.rect.y = self.solver_button.rect.bottom + 6 + idx * (button.rect.height + 8)
 
     def draw_menu(self) -> None:
         h, w = self.screen.get_height(), self.screen.get_width()
@@ -260,9 +277,9 @@ class MenuScreen:
         if self.solver_dropdown_progress > 0:
             current_h = max(1, int(self.solver_dropdown_max_h * self.solver_dropdown_progress))
             visible_rect = pygame.Rect(
-                self.ucs_option_button.rect.x,
-                self.ucs_option_button.rect.y,
-                self.ucs_option_button.rect.width,
+                self.solver_option_buttons[0].rect.x,
+                self.solver_option_buttons[0].rect.y,
+                self.solver_option_buttons[0].rect.width,
                 current_h,
             )
             drop_bg = visible_rect.inflate(10, 10)
@@ -270,7 +287,8 @@ class MenuScreen:
             pygame.draw.rect(self.screen, (248, 238, 170), drop_bg, width=2, border_radius=12)
             clip_before = self.screen.get_clip()
             self.screen.set_clip(visible_rect)
-            self.ucs_option_button.draw(self.screen, self.hint_font, mp)
+            for button in self.solver_option_buttons:
+                button.draw(self.screen, self.hint_font, mp)
             self.screen.set_clip(clip_before)
 
         self.howto_button.draw(self.screen, self.menu_font, mp)
@@ -358,7 +376,7 @@ class MenuScreen:
         self,
         event: pygame.event.Event,
         on_start_game: Callable[[str], None],
-        on_start_solver: Callable[[], None],
+        on_start_solver: Callable[[str], None],
         on_howto: Callable[[], None],
         on_exit: Callable[[], None],
     ) -> None:
@@ -387,10 +405,17 @@ class MenuScreen:
                 on_start_game(selected_difficulty)
                 return
 
-        if self.solver_dropdown_progress >= 0.95 and self.ucs_option_button.rect.collidepoint(event.pos):
-            self.solver_dropdown_open = False
-            on_start_solver()
-            return
+        if self.solver_dropdown_progress >= 0.95:
+            selected_solver = None
+            for button in self.solver_option_buttons:
+                if button.rect.collidepoint(event.pos):
+                    selected_solver = "a_star" if button.text == "A*" else button.text.lower()
+                    break
+
+            if selected_solver is not None:
+                self.solver_dropdown_open = False
+                on_start_solver(selected_solver)
+                return
 
         if self.howto_button.rect.collidepoint(event.pos):
             self.manual_dropdown_open = False

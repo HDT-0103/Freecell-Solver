@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import heapq
+import time
 from dataclasses import dataclass
 from itertools import count
-from typing import Callable
+from typing import Callable, TypeAlias
 
-from Source.core import rules
-from Source.core.rules import Move
-from Source.core.state import State
+try:
+    from core import rules
+    from core.rules import Move
+    from core.state import State
+except ModuleNotFoundError:
+    from Source.core import rules
+    from Source.core.rules import Move
+    from Source.core.state import State
 
 
 Heuristic = Callable[[State], int]
+FrontierEntry: TypeAlias = tuple[float, int, int, State]
+ProgressScore: TypeAlias = tuple[int, int, int, int]
+TOTAL_CARDS = 52
+SUIT_ORDER = {'C': 0, 'D': 1, 'H': 2, 'S': 3}
 
 
 @dataclass(frozen=True)
@@ -23,19 +33,42 @@ class AStarResult:
     heuristic_name: str
 
 
-def heuristic_zero(state: State) -> int:
-    return 0
+def _card_identity(card) -> tuple[int, int]:
+    return (card.rank, SUIT_ORDER[card.suit])
+
+
+def _search_key(state: State) -> tuple:
+    canonical_free_cells = tuple(
+        sorted(
+            (card for card in state.free_cells if card is not None),
+            key=_card_identity,
+        )
+    )
+    canonical_cascades = tuple(
+        sorted(
+            (tuple(cascade) for cascade in state.cascades),
+            key=lambda cascade: tuple(_card_identity(card) for card in cascade),
+        )
+    )
+    return (
+        canonical_cascades,
+        canonical_free_cells,
+        tuple((suit, state.foundations[suit]) for suit in ('C', 'D', 'H', 'S')),
+    )
+
+
+def _foundation_cards(state: State) -> int:
+    return sum(state.foundations.values())
+
+
+def _open_slots(state: State) -> int:
+    empty_free_cells = sum(1 for card in state.free_cells if card is None)
+    empty_cascades = sum(1 for cascade in state.cascades if not cascade)
+    return empty_free_cells + empty_cascades
 
 
 def heuristic_foundation_gap(state: State) -> int:
-    return 52 - sum(state.foundations.values())
-
-
-def heuristic_mobility(state: State) -> int:
-    remaining = heuristic_foundation_gap(state)
-    occupied_free_cells = sum(1 for card in state.free_cells if card is not None)
-    empty_cascades = sum(1 for cascade in state.cascades if not cascade)
-    return remaining + occupied_free_cells - empty_cascades
+    return TOTAL_CARDS - _foundation_cards(state)
 
 
 def heuristic_blocking(state: State) -> int:
@@ -60,9 +93,7 @@ def heuristic_blocking(state: State) -> int:
 
 
 HEURISTICS: dict[str, Heuristic] = {
-    'zero': heuristic_zero,
     'foundation_gap': heuristic_foundation_gap,
-    'mobility': heuristic_mobility,
     'blocking': heuristic_blocking,
 }
 
@@ -94,77 +125,177 @@ def reconstruct_solution(goal_state: State) -> tuple[list[Move], list[State]]:
     return moves, state_path
 
 
-def solve_a_star(
-    initial_state: State,
-    heuristic: str | Heuristic = 'foundation_gap',
-    max_nodes: int | None = None,
+def _build_result(
+    *,
+    state: State,
+    solved: bool,
+    expanded_nodes: int,
+    generated_nodes: int,
+    heuristic_name: str,
 ) -> AStarResult:
-    heuristic_name, heuristic_fn = get_heuristic(heuristic)
-
-    start = initial_state.clone(parent=None, move=None, g=0, h=0)
-    start.h = heuristic_fn(start)
-
-    if rules.is_goal(start):
-        moves, state_path = reconstruct_solution(start)
-        return AStarResult(
-            solved=True,
-            moves=moves,
-            state_path=state_path,
-            expanded_nodes=0,
-            generated_nodes=1,
-            heuristic_name=heuristic_name,
-        )
-
-    frontier: list[tuple[int, int, int, State]] = []
-    tie_breaker = count()
-    heapq.heappush(frontier, (start.g + start.h, start.h, next(tie_breaker), start))
-
-    best_cost: dict[tuple, int] = {start.as_key(): 0}
-    expanded_nodes = 0
-    generated_nodes = 1
-
-    while frontier:
-        _, _, _, current = heapq.heappop(frontier)
-        current_key = current.as_key()
-        if current.g != best_cost.get(current_key):
-            continue
-
-        if rules.is_goal(current):
-            moves, state_path = reconstruct_solution(current)
-            return AStarResult(
-                solved=True,
-                moves=moves,
-                state_path=state_path,
-                expanded_nodes=expanded_nodes,
-                generated_nodes=generated_nodes,
-                heuristic_name=heuristic_name,
-            )
-
-        if max_nodes is not None and expanded_nodes >= max_nodes:
-            break
-
-        expanded_nodes += 1
-
-        for move in rules.enumerate_legal_moves(current):
-            next_state = rules.apply_move(current, move)
-            next_state.h = heuristic_fn(next_state)
-            next_key = next_state.as_key()
-
-            if next_state.g >= best_cost.get(next_key, float('inf')):
-                continue
-
-            best_cost[next_key] = next_state.g
-            generated_nodes += 1
-            heapq.heappush(
-                frontier,
-                (next_state.g + next_state.h, next_state.h, next(tie_breaker), next_state),
-            )
-
+    moves, state_path = reconstruct_solution(state)
     return AStarResult(
-        solved=False,
-        moves=[],
-        state_path=[start],
+        solved=solved,
+        moves=moves,
+        state_path=state_path,
         expanded_nodes=expanded_nodes,
         generated_nodes=generated_nodes,
         heuristic_name=heuristic_name,
     )
+
+
+def _progress_score(state: State) -> ProgressScore:
+    return (_foundation_cards(state), _open_slots(state), -state.h, -state.g)
+
+
+def _frontier_priority(state: State, heuristic_weight: float) -> tuple[float, int]:
+    return (state.g + heuristic_weight * state.h, state.h)
+
+
+def _move_priority(move: Move) -> tuple[int, int]:
+    if move.dst_type == rules.LOCATION_FOUNDATION:
+        return (0, move.count)
+    if move.src_type == rules.LOCATION_FREE_CELL and move.dst_type == rules.LOCATION_CASCADE:
+        return (1, -move.count)
+    if move.src_type == rules.LOCATION_CASCADE and move.dst_type == rules.LOCATION_CASCADE:
+        return (2, -move.count)
+    if move.dst_type == rules.LOCATION_FREE_CELL:
+        return (3, move.count)
+    return (4, move.count)
+
+
+class AStarSearchSession:
+    def __init__(
+        self,
+        initial_state: State,
+        *,
+        heuristic: str | Heuristic = 'foundation_gap',
+        heuristic_weight: float = 1.0,
+    ) -> None:
+        if heuristic_weight <= 0:
+            raise ValueError("heuristic_weight must be > 0")
+
+        heuristic_name, heuristic_fn = get_heuristic(heuristic)
+        start = initial_state.clone(parent=None, move=None, g=0, h=0)
+        start.h = heuristic_fn(start)
+
+        self.heuristic_name = heuristic_name
+        self.heuristic_fn = heuristic_fn
+        self.heuristic_weight = heuristic_weight
+        self.frontier: list[FrontierEntry] = []
+        self.tie_breaker = count()
+        self.best_cost: dict[tuple, int] = {_search_key(start): 0}
+        self.expanded_nodes = 0
+        self.generated_nodes = 1
+        self.best_state = start
+        self.best_progress = _progress_score(start)
+        self._solved_state: State | None = start if rules.is_goal(start) else None
+        self._exhausted = False
+
+        if self._solved_state is None:
+            priority, secondary = _frontier_priority(start, heuristic_weight)
+            heapq.heappush(
+                self.frontier,
+                (priority, secondary, next(self.tie_breaker), start),
+            )
+
+    @property
+    def solved(self) -> bool:
+        return self._solved_state is not None
+
+    @property
+    def exhausted(self) -> bool:
+        return self._exhausted
+
+    def advance(
+        self,
+        *,
+        max_nodes: int | None = None,
+        max_time_seconds: float | None = None,
+    ) -> AStarResult:
+        if self._solved_state is not None:
+            return _build_result(
+                state=self._solved_state,
+                solved=True,
+                expanded_nodes=self.expanded_nodes,
+                generated_nodes=self.generated_nodes,
+                heuristic_name=self.heuristic_name,
+            )
+
+        step_begin = time.perf_counter()
+        step_expanded = 0
+
+        while self.frontier:
+            if max_time_seconds is not None and (time.perf_counter() - step_begin) >= max_time_seconds:
+                break
+            if max_nodes is not None and step_expanded >= max_nodes:
+                break
+
+            _, _, _, current = heapq.heappop(self.frontier)
+            current_key = _search_key(current)
+            if current.g != self.best_cost.get(current_key):
+                continue
+
+            if rules.is_goal(current):
+                self._solved_state = current
+                return _build_result(
+                    state=current,
+                    solved=True,
+                    expanded_nodes=self.expanded_nodes,
+                    generated_nodes=self.generated_nodes,
+                    heuristic_name=self.heuristic_name,
+                )
+
+            self.expanded_nodes += 1
+            step_expanded += 1
+
+            current_progress = _progress_score(current)
+            if current_progress > self.best_progress:
+                self.best_progress = current_progress
+                self.best_state = current
+
+            for move in sorted(rules.enumerate_legal_moves(current), key=_move_priority):
+                next_state = rules.apply_move(current, move)
+                next_state.h = self.heuristic_fn(next_state)
+                next_key = _search_key(next_state)
+
+                if next_state.g >= self.best_cost.get(next_key, float('inf')):
+                    continue
+
+                self.best_cost[next_key] = next_state.g
+                self.generated_nodes += 1
+                next_progress = _progress_score(next_state)
+                if next_progress > self.best_progress:
+                    self.best_progress = next_progress
+                    self.best_state = next_state
+                priority, secondary = _frontier_priority(next_state, self.heuristic_weight)
+                heapq.heappush(
+                    self.frontier,
+                    (priority, secondary, next(self.tie_breaker), next_state),
+                )
+
+        if not self.frontier:
+            self._exhausted = True
+
+        return _build_result(
+            state=self.best_state,
+            solved=False,
+            expanded_nodes=self.expanded_nodes,
+            generated_nodes=self.generated_nodes,
+            heuristic_name=self.heuristic_name,
+        )
+
+
+def solve_a_star(
+    initial_state: State,
+    heuristic: str | Heuristic = 'foundation_gap',
+    max_nodes: int | None = None,
+    max_time_seconds: float | None = None,
+    heuristic_weight: float = 1.0,
+) -> AStarResult:
+    session = AStarSearchSession(
+        initial_state,
+        heuristic=heuristic,
+        heuristic_weight=heuristic_weight,
+    )
+    return session.advance(max_nodes=max_nodes, max_time_seconds=max_time_seconds)

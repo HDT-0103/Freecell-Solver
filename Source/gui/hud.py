@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pygame
 
+from core import rules
+from core.state import State
 from solvers.ucs import UCSSearchResult
 
 
@@ -39,10 +41,10 @@ def draw_win_or_lose_overlay(
     screen: pygame.Surface,
     title_font: pygame.font.Font,
     hint_font: pygame.font.Font,
-    is_won: bool,
+    state: State,
     is_stuck: bool,
 ) -> None:
-    if is_won:
+    if rules.is_goal(state):
         overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 95))
         screen.blit(overlay, (0, 0))
@@ -57,7 +59,7 @@ def draw_win_or_lose_overlay(
         overlay.fill((0, 0, 0, 95))
         screen.blit(overlay, (0, 0))
         lose = title_font.render("NO MOVES LEFT", True, (255, 210, 150))
-        tip = hint_font.render("You are stuck. Return to menu and start a new game.", True, (255, 240, 200))
+        tip = hint_font.render("You are stuck. Press R to start a new shuffle.", True, (255, 240, 200))
         cx = screen.get_rect().centerx
         cy = screen.get_rect().centery
         screen.blit(lose, (cx - lose.get_width() // 2, cy - lose.get_height() // 2 - 20))
