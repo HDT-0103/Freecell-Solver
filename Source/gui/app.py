@@ -153,6 +153,7 @@ class FreeCellApp:
         self.victory_timer = 0
         self.particles = []
         self.lose_particles = []
+        self._is_lose_music_playing = False
 
         self.title_font = pygame.font.SysFont("georgia", 64, bold=True)
         self.menu_font = pygame.font.SysFont("georgia", 36, bold=True)
@@ -373,21 +374,6 @@ class FreeCellApp:
                 "alpha": random.randint(20, 60), # Rất trong suốt
                 "life": random.randint(100, 200) # Tuổi thọ hạt
             })
-
-    def _spawn_lose_particles(self):
-        """Tạo ra các hạt sương khói mờ ảo trôi ngang màn hình."""
-        import random
-        w, h = self.screen.get_size()
-        # Chỉ tạo hạt nếu đang bị kẹt (Stuck)
-        if len(self.lose_particles) < 50: # Giới hạn 50 hạt để không lag
-            self.lose_particles.append({
-                "pos": [random.randint(-50, w), random.randint(0, h)],
-                "vel": [random.uniform(0.2, 0.8), random.uniform(-0.2, 0.2)], # Trôi rất chậm
-                "size": random.randint(40, 100), # Hạt to mờ
-                "alpha": random.randint(20, 60), # Rất trong suốt
-                "life": random.randint(100, 200) # Tuổi thọ hạt
-            })
-
 
     def _draw_poker_chip(self, name: str, center: tuple, radius: int, color: tuple, is_hover: bool):
         """Vẽ một con chip Poker 3D với họa tiết viền."""
@@ -885,6 +871,7 @@ class FreeCellApp:
                 )
             elif hasattr(result, "metrics"):
                 total_steps = self._ai_total_applied_moves + result.metrics.solution_steps
+                result.metrics.solution_steps = total_steps
                 self.solver_message = (
                     f"{self.solver_label}: {name} - "
                     f"{total_steps} steps, "
@@ -1269,6 +1256,65 @@ class FreeCellApp:
             self._is_lose_music_playing = False
             self._play_bg_music()
 
+    def _update_victory_logic(self) -> None:
+        if self.scene != "game":
+            return
+
+        is_goal = rules.is_goal(self.game.get_state())
+        if is_goal:
+            self.victory_timer += 1
+            if self.jackpot_sound and self.victory_timer == 1:
+                self.jackpot_sound.play()
+            return
+
+        self.victory_timer = 0
+        if self.is_stuck and not self._is_lose_music_playing:
+            self._play_lose_music()
+        elif not self.is_stuck and self._is_lose_music_playing:
+            self._is_lose_music_playing = False
+            self._play_bg_music()
+
+    def _should_draw_solver_metrics(self) -> bool:
+        metrics = getattr(self.solver_result, "metrics", None)
+        return (
+            metrics is not None
+            and rules.is_goal(self.game.get_state())
+            and (self.animator.status.finished or metrics.solution_steps == 0)
+        )
+
+    def _draw_lose_celebration(self) -> None:
+        if not self.is_stuck or rules.is_goal(self.game.get_state()):
+            return
+
+        draw_win_or_lose_overlay(
+            self.screen,
+            self.title_font,
+            self.hint_font,
+            self.game.get_state(),
+            self.is_stuck,
+        )
+
+    def _draw_victory_celebration(self) -> None:
+        if not rules.is_goal(self.game.get_state()):
+            return
+
+        draw_win_or_lose_overlay(
+            self.screen,
+            self.title_font,
+            self.hint_font,
+            self.game.get_state(),
+            self.is_stuck,
+        )
+
+        if self._should_draw_solver_metrics():
+            draw_solver_stats(
+                self.screen,
+                self.hint_font,
+                self.body_font,
+                self.solver_result,
+                self.solver_label,
+            )
+
     def _draw(self) -> None:
         if self.scene in ("intro", "outro"):
             pass  # Do not draw game UI when playing video
@@ -1292,9 +1338,7 @@ class FreeCellApp:
 
     def _draw_game_hud(self) -> None:
         h = self.screen.get_height()
-        
         hint = self.hint_font.render("ESC: Menu   |   R: New Shuffle", True, (255, 250, 205))
-        # Luôn cách đáy màn hình 14px
         self.screen.blit(hint, (18, h - hint.get_height() - 14))
 
         if self.is_animating:
@@ -1308,13 +1352,9 @@ class FreeCellApp:
             msg = self.hint_font.render(self.solver_message, True, (255, 245, 180))
             self.screen.blit(msg, (18, 16))
 
-        if self.is_stuck:
-            w, h = self.screen.get_size()
-        
-
-        # if self.ai_solver_mode and not self.is_animating and not rules.is_goal(self.game.get_state()):
-        #    lock = self.hint_font.render("AI Solver mode: manual card movement is disabled.", True, (255, 236, 170))
-        #    self.screen.blit(lock, (18, 48))
+        if self.ai_solver_mode and not self.is_animating and not rules.is_goal(self.game.get_state()):
+            lock = self.hint_font.render("AI Solver mode: manual card movement is disabled.", True, (255, 236, 170))
+            self.screen.blit(lock, (18, 48))
 
     def _draw_ai_thinking_cocktail(self):
         """Vẽ icon ly cocktail thu nhỏ, thẳng hàng và rực rỡ (Nâng cấp Pro)."""
