@@ -43,7 +43,7 @@ SolverResult = UCSSearchResult | AStarResult
 class FreeCellApp:
     """Main application controller for FreeCell (scene management + game loop)."""
 
-    _GAME_SIZE = (1366, 800)  
+    _GAME_SIZE = (1366, 990)  
 
     @staticmethod
     def _center_window(win_w: int, win_h: int) -> None:
@@ -58,7 +58,7 @@ class FreeCellApp:
             info = pygame.display.Info()
             screen_w, screen_h = info.current_w, info.current_h
         x = (screen_w - win_w) // 2
-        y = (screen_h - win_h) // 2
+        y = 40
         os.environ["SDL_VIDEO_WINDOW_POS"] = f"{x},{y}"
 
     def _set_screen(self, size: tuple, flags: int = 0) -> None:
@@ -91,17 +91,54 @@ class FreeCellApp:
         self._set_screen(self._selector_size)
         self.menu.rebuild_for_screen(self.screen)
 
+    def _scene_transition(self, target_setup_func, target_scene_name: str) -> None:
+        """Hiệu ứng Fade Out / Fade In mượt mà giữa các cảnh."""
+        # 1. FADE OUT (Tối dần màn hình hiện tại)
+        w, h = self.screen.get_size()
+        fade_surf = pygame.Surface((w, h))
+        fade_surf.fill((0, 0, 0)) # Dùng màn đen làm nền chuyển cảnh
+        
+        for alpha in range(0, 260, 25): # Tốc độ mờ (tăng mỗi 25)
+            fade_surf.set_alpha(min(alpha, 255))
+            self._draw() # Vẽ lại cảnh cũ
+            self.screen.blit(fade_surf, (0, 0))
+            pygame.display.flip()
+            self.clock.tick(60)
+            pygame.event.pump() # Ngăn game bị Not Responding trong lúc chuyển cảnh
+
+        # 2. THAY ĐỔI SCENE VÀ CHẠY SETUP (Resize màn hình, nạp ảnh...)
+        self.scene = target_scene_name
+        if target_setup_func:
+            target_setup_func()
+
+        # 3. FADE IN (Sáng dần lên cảnh mới)
+        w, h = self.screen.get_size() # Lấy kích thước màn hình MỚI
+        fade_surf = pygame.Surface((w, h))
+        fade_surf.fill((0, 0, 0))
+        
+        for alpha in range(255, -25, -25):
+            fade_surf.set_alpha(max(alpha, 0))
+            self._draw() # Vẽ cảnh mới (Lúc này bài bắt đầu bay xuống)
+            self.screen.blit(fade_surf, (0, 0))
+            pygame.display.flip()
+            self.clock.tick(60)
+            pygame.event.pump()
+
     def _go_menu(self) -> None:
-        self.scene = "menu"
-        self._switch_to_menu_screen()
+        self._play_click_sound()
+        self._scene_transition(self._switch_to_menu_screen, "menu")
 
     def _go_easy_select(self) -> None:
-        self.scene = "easy_select"
-        self._switch_to_selector_screen()
+        self._play_click_sound()
+        self._scene_transition(self._switch_to_selector_screen, "easy_select")
 
     def _go_howto(self) -> None:
-        self.scene = "howto"
-        self._switch_to_howto_screen()
+        self._play_click_sound()
+        self._scene_transition(self._switch_to_howto_screen, "howto")
+
+    def _go_ai_select(self) -> None:
+        self._play_click_sound()
+        self._scene_transition(self._switch_to_menu_screen, "ai_select")
 
     def __init__(self) -> None:
         pygame.init()
@@ -115,13 +152,23 @@ class FreeCellApp:
         self.selected_manual_difficulty = "easy"
         self.victory_timer = 0
         self.particles = []
+        self.lose_particles = []
 
         self.title_font = pygame.font.SysFont("georgia", 64, bold=True)
         self.menu_font = pygame.font.SysFont("georgia", 36, bold=True)
         self.hint_font = pygame.font.SysFont("georgia", 24, bold=True)
         self.body_font = pygame.font.SysFont("georgia", 28)
+        self.victory_title_font = pygame.font.SysFont("arialblack", 120)
 
-       
+        self.click_sound = None
+        click_path = os.path.join(os.path.dirname(__file__), "..", "..", "btn_click.mp3")
+        if os.path.exists(click_path):
+            try:
+                self.click_sound = pygame.mixer.Sound(click_path)
+                self.click_sound.set_volume(0.6) # Âm lượng to, rõ ràng
+            except Exception as e:
+                print(f"Lỗi nạp âm thanh click: {e}")
+
         # 1. Background Image setup cho Menu
         bg_path = os.path.join(os.path.dirname(__file__), "..", "..", "background.jpg")
         bg_image = None
@@ -225,6 +272,22 @@ class FreeCellApp:
             except Exception as e:
                 print(f"Error loading jackpot sound: {e}")
 
+        self.bg_music_path = os.path.join(os.path.dirname(__file__), "..", "..", "bg_jazz.mp3")
+
+        if self.scene != "intro":
+            self._play_bg_music()
+
+        self.hover_sound = None
+        self._last_hovered_item = None
+
+        hover_path = os.path.join(os.path.dirname(__file__), "..", "..", "chip_hover.mp3")
+        if os.path.exists(hover_path):
+            try:
+                self.hover_sound = pygame.mixer.Sound(hover_path)
+                self.hover_sound.set_volume(0.4) 
+            except Exception as e:
+                print(f"Error loading hover sound: {e}")
+
         self._board_bgs = {
             "manual": _load_bg("board_bg_manual.jpg"),
             "ucs":    _load_bg("board_bg_ucs.jpg"),
@@ -297,10 +360,34 @@ class FreeCellApp:
         self.current_hint = None
         self._a_star_session: AStarSearchSession | None = None
 
+    def _spawn_lose_particles(self):
+        """Tạo ra các hạt sương khói mờ ảo trôi ngang màn hình."""
+        import random
+        w, h = self.screen.get_size()
+        # Chỉ tạo hạt nếu đang bị kẹt (Stuck)
+        if len(self.lose_particles) < 50: # Giới hạn 50 hạt để không lag
+            self.lose_particles.append({
+                "pos": [random.randint(-50, w), random.randint(0, h)],
+                "vel": [random.uniform(0.2, 0.8), random.uniform(-0.2, 0.2)], # Trôi rất chậm
+                "size": random.randint(40, 100), # Hạt to mờ
+                "alpha": random.randint(20, 60), # Rất trong suốt
+                "life": random.randint(100, 200) # Tuổi thọ hạt
+            })
 
-    def _go_ai_select(self) -> None:
-        self.scene = "ai_select"
-        self._switch_to_menu_screen()
+    def _spawn_lose_particles(self):
+        """Tạo ra các hạt sương khói mờ ảo trôi ngang màn hình."""
+        import random
+        w, h = self.screen.get_size()
+        # Chỉ tạo hạt nếu đang bị kẹt (Stuck)
+        if len(self.lose_particles) < 50: # Giới hạn 50 hạt để không lag
+            self.lose_particles.append({
+                "pos": [random.randint(-50, w), random.randint(0, h)],
+                "vel": [random.uniform(0.2, 0.8), random.uniform(-0.2, 0.2)], # Trôi rất chậm
+                "size": random.randint(40, 100), # Hạt to mờ
+                "alpha": random.randint(20, 60), # Rất trong suốt
+                "life": random.randint(100, 200) # Tuổi thọ hạt
+            })
+
 
     def _draw_poker_chip(self, name: str, center: tuple, radius: int, color: tuple, is_hover: bool):
         """Vẽ một con chip Poker 3D với họa tiết viền."""
@@ -363,6 +450,8 @@ class FreeCellApp:
         total_h = len(algos) * (radius * 2) + (len(algos) - 1) * gap
         start_y = h // 2 - total_h // 2 + radius
 
+        current_hover = None
+
         for i, (name, color) in enumerate(algos):
             # Bạn có thể cho các chip hơi so le (zig-zag) cho tự nhiên
             offset_x = 40 if i % 2 == 0 else -40 
@@ -372,6 +461,9 @@ class FreeCellApp:
             dist = math.hypot(mp[0] - center[0], mp[1] - center[1])
             is_hover = dist < radius
             
+            if is_hover:
+                current_hover = i
+
             self._draw_poker_chip(name, center, radius, color, is_hover)
 
         # Back button
@@ -382,6 +474,12 @@ class FreeCellApp:
         lbl = self.hint_font.render("Back", True, GOLD_L)
         self.screen.blit(lbl, (back_rect.centerx - lbl.get_width()//2,
                                 back_rect.centery - lbl.get_height()//2))
+
+        if current_hover != getattr(self, "_last_hovered_item", None):
+            if current_hover is not None and getattr(self, "hover_sound", None):
+                self.hover_sound.play() # Cạch!
+            # Cập nhật lại bộ nhớ
+            self._last_hovered_item = current_hover
 
     def _solver_renders_partial_progress(self) -> bool:
         return self.solver_algorithm != "a_star"
@@ -519,6 +617,7 @@ class FreeCellApp:
     def _on_game_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
+                self._play_click_sound()
                 self._reset_victory_state()
                 self._cancel_pending_solver()
                 self.animator.clear()
@@ -528,15 +627,22 @@ class FreeCellApp:
                 self._ai_seen_states.clear()
                 self._go_menu()
             elif event.key == pygame.K_h and not self.ai_solver_mode and not self.animator.status.active:
+                self._play_click_sound()
                 self._request_hint()
             elif event.key == pygame.K_v: 
                 self._debug_set_instant_win()
+            elif event.key == pygame.K_l:
+                self.is_stuck = True
+                self.solver_message = "DEBUG: You pressed 'L' to trigger Lose screen."
+                self._play_lose_music()
             elif event.key == pygame.K_r:
+                self._play_click_sound()
                 self._reset_victory_state()
                 self._cancel_pending_solver()
                 self.game.new_game()
                 self.board.state = self.game.get_state().clone()
-                self.board.on_reset()
+                # self.board.on_reset()
+                self.board.start_deal_animation(self.game.get_state())
                 self.animator.clear()
                 self.is_animating = False
                 self.ai_solver_mode = False
@@ -561,6 +667,7 @@ class FreeCellApp:
                     self._refresh_game_flags()
 
     def _start_manual_game(self, difficulty: str) -> None:
+        self._play_click_sound()
         self._reset_victory_state()
         self._cancel_pending_solver()
         self.animator.clear()
@@ -583,12 +690,12 @@ class FreeCellApp:
 
             self.game.new_game(seed=None)
             self._update_game_from_state()
-            self.board.on_reset()
+            # self.board.on_reset()
+            self.board.start_deal_animation(self.game.get_state())
             self._refresh_game_flags()
             self.solver_message = "No Easy sample deals found. Started a random shuffle."
             self.board.set_board_bg(self._board_bgs.get("manual"))
-            self._switch_to_game_screen()
-            self.scene = "game"
+            self._scene_transition(self._switch_to_game_screen, "game")
             return
         self.solver_algorithm = "ucs"
         self.solver_label = "UCS"
@@ -604,8 +711,7 @@ class FreeCellApp:
             self.solver_message = f"No {difficulty.title()} sample deals found. Started a random shuffle."
 
         self.board.set_board_bg(self._board_bgs.get("manual"))
-        self._switch_to_game_screen()
-        self.scene = "game"
+        self._scene_transition(self._switch_to_game_screen, "game")
 
     def _set_selected_easy_game_index(self, index: int) -> None:
         easy_games = self._sample_games_by_difficulty.get("easy", [])
@@ -617,26 +723,30 @@ class FreeCellApp:
     def _start_selected_easy_game(self, selected_index: int) -> None:
         easy_games = self._sample_games_by_difficulty.get("easy", [])
         if not easy_games:
+            self._play_click_sound()
             self.game.new_game(seed=None)
             self._update_game_from_state()
-            self.board.on_reset()
+            self.board.start_deal_animation(self.game.get_state())
             self._refresh_game_flags()
             self.solver_message = "No Easy sample deals found. Started a random shuffle."
             self.board.set_board_bg(self._board_bgs.get("manual"))
             self._switch_to_game_screen()
             self.scene = "game"
+            self.board.start_deal_animation(self.game.get_state())
             return
 
         selected_index = max(0, min(selected_index, len(easy_games) - 1))
         self.selected_easy_game_index = selected_index
         loaded = self._load_sample_game_by_index("easy", selected_index)
+        self._play_click_sound()
 
         if loaded:
             self.solver_message = f"Loaded Easy sample: {self.last_loaded_sample}"
+            self.board.start_deal_animation(self.game.get_state())
         else:
             self.game.new_game(seed=None)
             self._update_game_from_state()
-            self.board.on_reset()
+            self.board.start_deal_animation(self.game.get_state())
             self._refresh_game_flags()
             self.solver_message = "Failed to load selected Easy deal. Started a random shuffle."
 
@@ -645,6 +755,7 @@ class FreeCellApp:
         self.scene = "game"
 
     def _start_solver_game(self, algorithm: str = "ucs") -> None:
+        self._play_click_sound()
         self._reset_victory_state()
         self._cancel_pending_solver()
         self.animator.clear()
@@ -669,17 +780,16 @@ class FreeCellApp:
         if not loaded:
             self.game.new_game()
             self.board.state = self.game.get_state().clone()
-            self.board.on_reset()
+            # self.board.on_reset()
+            self.board.start_deal_animation(self.game.get_state())
             self._refresh_game_flags()
             self.solver_message = f"AI Solver ({algorithm.upper()}) sample not found. Started a random shuffle."
         else:
             self.solver_message = f"AI Solver ({algorithm.upper()}): loaded {self.last_loaded_sample}, searching..."
 
+        
         self.board.set_board_bg(self._board_bgs.get(algorithm))
-        self._switch_to_game_screen()
-        self.board.set_board_bg(self._board_bgs.get(algorithm))
-        self._switch_to_game_screen()
-        self.scene = "game"
+        self._scene_transition(self._switch_to_game_screen, "game")
         self._launch_solver_async()
 
     def _launch_solver_async(self) -> None:
@@ -853,7 +963,7 @@ class FreeCellApp:
         ok = load_game_from_json(file_path, self.game)
         if ok:
             self.board.state = self.game.get_state().clone()
-            self.board.on_reset()
+            self.board.start_deal_animation(self.game.get_state())
             self.last_loaded_sample = os.path.relpath(file_path, SOLUTION_DIR)
             self._refresh_game_flags()
         return ok
@@ -870,7 +980,7 @@ class FreeCellApp:
             self._sample_game_indices[difficulty] = (index + 1) % len(files)
             self.last_loaded_sample = os.path.join(difficulty, os.path.basename(file_path))
             self._update_game_from_state()
-            self.board.on_reset()
+            self.board.start_deal_animation(self.game.get_state())
             self._refresh_game_flags()
         return ok
 
@@ -975,10 +1085,41 @@ class FreeCellApp:
 
     def _trigger_exit(self) -> None:
         """Trigger safe exit (plays Outro video if exists)."""
+        pygame.mixer.music.fadeout(500)
+
         if self.outro_clip is not None:
             self.scene = "outro"
         else:
             self.running = False
+
+    def _play_bg_music(self) -> None:
+        """Phát nhạc nền Jazz lặp vô tận, âm lượng nhỏ để không lấn át tiếng Jackpot."""
+        if hasattr(self, 'bg_music_path') and os.path.exists(self.bg_music_path):
+            try:
+                pygame.mixer.music.load(self.bg_music_path)
+                pygame.mixer.music.set_volume(0.8) # Âm lượng 30% để làm nền (Background)
+                pygame.mixer.music.play(-1) # -1 nghĩa là lặp lại vô tận
+            except Exception as e:
+                print(f"Lỗi khi nạp nhạc nền: {e}")
+
+    def _play_click_sound(self) -> None:
+        """Phát tiếng click mượt mà khi nhấn nút."""
+        if getattr(self, "click_sound", None):
+            self.click_sound.play()
+
+    def _play_lose_music(self) -> None:
+        """Làm mờ nhạc Jazz và phát nhạc nền buồn khi thua cuộc."""
+        if not getattr(self, "_is_lose_music_playing", False):
+            lose_path = os.path.join(os.path.dirname(__file__), "..", "..", "lose_bgm.mp3")
+            if os.path.exists(lose_path):
+                try:
+                    pygame.mixer.music.fadeout(500) # Từ từ tắt nhạc Jazz
+                    pygame.mixer.music.load(lose_path)
+                    pygame.mixer.music.set_volume(0.5)
+                    pygame.mixer.music.play(-1) # Lặp vô tận
+                    self._is_lose_music_playing = True
+                except Exception as e:
+                    print(f"Lỗi nạp nhạc thua: {e}")
 
     def _play_custom_video(self, clip, allow_skip: bool = True) -> None:
         base_path = os.path.splitext(clip.filename)[0]
@@ -1073,11 +1214,12 @@ class FreeCellApp:
             self.video_clip.close()
             self.video_clip = None
 
+        self._play_bg_music()
+
     def _update_game_from_state(self) -> None:
         self.board.state = self.game.get_state().clone()
         self.board.on_reset()
 
-    # --- Thêm vào Source/gui/app.py ---
 
     def _debug_set_instant_win(self) -> None:
         """Hàm 'hack' game: Đưa về trạng thái chỉ còn 1 bước là thắng để test hiệu ứng."""
@@ -1111,8 +1253,14 @@ class FreeCellApp:
         """Dọn dẹp sạch sẽ hiệu ứng ăn mừng để không bị lây sang ván sau."""
         self.victory_timer = 0
         self.particles = []
+        self.lose_particles = []
+
         if hasattr(self, 'jackpot_sound') and self.jackpot_sound:
             self.jackpot_sound.stop() # Dừng tiếng tiền đổ nếu đang kêu
+
+        if getattr(self, "_is_lose_music_playing", False):
+            self._is_lose_music_playing = False
+            self._play_bg_music()
 
     def _draw(self) -> None:
         if self.scene in ("intro", "outro"):
@@ -1129,6 +1277,8 @@ class FreeCellApp:
         elif self.scene == "game":
             self.board.draw(self.screen)
             self._draw_game_hud()
+            self._draw_ai_thinking_cocktail()
+            self._draw_lose_celebration()
             self._draw_victory_celebration()
         elif self.scene == "ai_select":
             self._draw_ai_selector()
@@ -1151,29 +1301,94 @@ class FreeCellApp:
             msg = self.hint_font.render(self.solver_message, True, (255, 245, 180))
             self.screen.blit(msg, (18, 16))
 
-        if self.ai_solver_mode and not self.is_animating and not rules.is_goal(self.game.get_state()):
-            lock = self.hint_font.render("AI Solver mode: manual card movement is disabled.", True, (255, 236, 170))
-            self.screen.blit(lock, (18, 48))
+        if self.is_stuck:
+            w, h = self.screen.get_size()
+        
 
-        if isinstance(self.solver_result, UCSSearchResult) and (
-            rules.is_goal(self.game.get_state())
-            and (self.animator.status.finished or self.solver_result.metrics.solution_steps == 0)
-        ):
-            draw_solver_stats(self.screen, self.hint_font, self.body_font, self.solver_result)
+        # if self.ai_solver_mode and not self.is_animating and not rules.is_goal(self.game.get_state()):
+        #    lock = self.hint_font.render("AI Solver mode: manual card movement is disabled.", True, (255, 236, 170))
+        #    self.screen.blit(lock, (18, 48))
 
-        draw_win_or_lose_overlay(
-            self.screen,
-            self.title_font,
-            self.hint_font,
-            self.game.get_state(),
-            self.is_stuck,
-        )
+    def _draw_ai_thinking_cocktail(self):
+        """Vẽ icon ly cocktail thu nhỏ, thẳng hàng và rực rỡ (Nâng cấp Pro)."""
+        # Chỉ sủi bọt khi AI thực sự đang tìm kiếm
+        if not self._solver_pending: 
+            if hasattr(self, "is_solving_indicator_particles"):
+                self.is_solving_indicator_particles = []
+            return
+
+        import math, random
+        # 1. Tọa độ MINI: gx=520, gy=15. Nằm sau text "searching..."
+        gx, gy = 780, 15 
+        gw, gh = 25, 32 # Tăng kích thước nhẹ 25x32px để nổi bật hơn
+        
+        if not hasattr(self, "is_solving_indicator_particles"):
+            self.is_solving_indicator_particles = []
+
+        # 2. HIỆU ỨNG: Sinh bọt khí rực rỡ (GOLD_L)
+        if len(self.is_solving_indicator_particles) < 20 and random.random() < 0.2:
+            self.is_solving_indicator_particles.append({
+                "x_base": random.uniform(gx + 5, gx + gw - 5),
+                "y": gy + gh - 5,
+                "speed": random.uniform(0.4, 0.9),
+                "offset": random.uniform(0, math.pi * 2),
+                "size": random.randint(1, 3), # Hạt li ti
+                "alpha": random.randint(180, 255)
+            })
+
+        # 3. NÂNG CẤP NỔI BẬT: Nước màu Hổ pháchGlowing Amber
+        wave = math.sin(pygame.time.get_ticks() * 0.01) * 2.5
+        # Mực nước cao hơn (gy + 10)
+        liquid_rect = [
+            (gx + 4, gy + 10 + wave), (gx + gw - 4, gy + 10 + wave),
+            (gx + gw - 8, gy + gh - 2), (gx + 8, gy + gh - 2)
+        ]
+        liquid_surf = pygame.Surface((gw, gh + 10), pygame.SRCALPHA)
+        # SỬA: Chuyển sang màu Hổ phách Glowing Amber rực rỡ
+        pygame.draw.polygon(liquid_surf, (255, 191, 0, 220), [(p[0]-gx, p[1]-gy) for p in liquid_rect])
+        self.screen.blit(liquid_surf, (gx, gy))
+
+        # 4. Cập nhật và vẽ bọt khí (Màu Gold rực rỡ)
+        for p in self.is_solving_indicator_particles[:]:
+            p["y"] -= p["speed"]
+            drift = math.sin(p["y"] * 0.3 + p["offset"]) * 2.5
+            if p["y"] < gy + 10 + wave:
+                self.is_solving_indicator_particles.remove(p)
+                continue
+            # (255, 223, 100) là GOLD_L của bạn
+            pygame.draw.circle(self.screen, (255, 223, 100, p["alpha"]), (int(p["x_base"] + drift), int(p["y"])), p["size"])
+
+        # 5. NÂNG CẤP NỔI BẬT: KHUNG LY METALLIC GOLD (Rực Rỡ)
+        glass_points = [(gx, gy), (gx + gw, gy), (gx + gw - 8, gy + gh), (gx + 8, gy + gh)]
+        
+        # Thêm một viền Gold mảnh phía trước để tạo độ nổi (Metallic edge)
+        # (255, 215, 0) là màu Vàng Bright Gold
+        pygame.draw.lines(self.screen, (255, 215, 0, 200), False, glass_points, 1) # Gold rực rỡ
+        
+        # Chân ly đơn giản nhưng rực rỡ
+        pygame.draw.line(self.screen, (255, 215, 0, 200), (gx + gw//2, gy + gh), (gx + gw//2, gy + gh + 12), 1)
+        pygame.draw.line(self.screen, (255, 215, 0, 200), (gx + 6, gy + gh + 12), (gx + gw - 6, gy + gh + 12), 1)
+
+    #def _refresh_game_flags(self) -> None:
+    #    self.view_model = self.game.get_view_model()
+    #    is_won = self.view_model["is_goal"]
+    #    has_moves = len(self.view_model.get("legal_moves", [])) > 0
+    #    self.is_stuck = (not is_won) and (not has_moves)
 
     def _refresh_game_flags(self) -> None:
+        # Nếu đang trong chế độ test phím 'L', không cho phép tự động tính toán lại
+        # (Để hiệu ứng thua không bị mất ngay lập tức)
+        if self.solver_message.startswith("DEBUG: You pressed 'L'"):
+            return
+
         self.view_model = self.game.get_view_model()
         is_won = self.view_model["is_goal"]
         has_moves = len(self.view_model.get("legal_moves", [])) > 0
+        was_stuck = getattr(self, "is_stuck", False)
         self.is_stuck = (not is_won) and (not has_moves)
+
+        if self.is_stuck and not was_stuck:
+            self._play_lose_music()
 
     def _spawn_victory_particles(self):
         """Tạo ra các đồng xu vàng ngẫu nhiên ở cạnh trên màn hình."""
@@ -1189,24 +1404,32 @@ class FreeCellApp:
 
     def _update_victory_logic(self):
         """Cập nhật vị trí tiền rơi và kiểm tra thời gian quay về menu."""
+        # --- THÊM ĐIỀU KIỆN CHẶN TẠI ĐÂY ---
+        # 1. Chỉ chạy khi đang ở màn hình Game
+        # 2. Không chạy khi AI đang di chuyển bài (is_animating)
+        if self.scene != "game" or self.is_animating:
+            return
+        # ----------------------------------
+
+        # Nếu chưa thắng thì thoát luôn
         if not rules.is_goal(self.game.get_state()):
             return
 
-        # Khi victory_timer bắt đầu từ 0 sang 1, tức là khoảnh khắc vừa thắng
+        # Khi victory_timer bắt đầu từ 0 sang 1, phát âm thanh
         if self.victory_timer == 0 and self.jackpot_sound:
-            self.jackpot_sound.play() # Phát tiếng tiền đổ loảng xoảng
+            self.jackpot_sound.play() 
 
         self.victory_timer += 1
         self._spawn_victory_particles()
 
-        # Cập nhật tọa độ từng hạt
+        # Cập nhật tọa độ tiền rơi
         for p in self.particles[:]:
             p["pos"][0] += p["vel"][0]
             p["pos"][1] += p["vel"][1]
             if p["pos"][1] > self.screen.get_height():
                 self.particles.remove(p)
 
-        # Sau khoảng 5 giây (300 frames tại 60FPS), tự động về menu
+        # Sau khoảng 5 giây, tự động về menu
         if self.victory_timer > 300:
             self.victory_timer = 0
             self.particles = []
@@ -1214,36 +1437,117 @@ class FreeCellApp:
             self._go_menu()
 
     def _draw_victory_celebration(self):
-        """Vẽ hiệu ứng tiền rơi và Popup chúc mừng."""
-        if self.victory_timer <= 0:
+        """Vẽ VICTORY 3D với viền Burnt Coffee và hiệu ứng vệt sáng kim loại (Glint)."""
+        if self.victory_timer <= 0 or not rules.is_goal(self.game.get_state()):
             return
 
-        # 1. Vẽ mưa tiền xu
+        w, h = self.screen.get_size()
+        import math
+
+        # 1. Làm mờ nền màu Burnt Coffee (52, 21, 15)
+        dim_surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        dim_surf.fill((52, 21, 15, 180)) 
+        self.screen.blit(dim_surf, (0, 0))
+
+        # Vẽ mưa tiền/chip (Particles)
         for p in self.particles:
             pygame.draw.circle(self.screen, p["color"], (int(p["pos"][0]), int(p["pos"][1])), p["size"])
-            pygame.draw.circle(self.screen, (0, 0, 0), (int(p["pos"][0]), int(p["pos"][1])), p["size"], 1)
 
-        # 2. Vẽ Popup JACKPOT ở giữa màn hình
-        w, h = self.screen.get_size()
-        pop_w, pop_h = 600, 200
-        px, py = (w - pop_w) // 2, (h - pop_h) // 2
+        # 2. Chuẩn bị các lớp chữ
+        text = "VICTORY"
+        shadow_surf = self.victory_title_font.render(text, True, (20, 10, 0)) # Bóng đổ sâu
+        body_surf = self.victory_title_font.render(text, True, (212, 175, 55)) # Vàng đồng
+        outline_surf = self.victory_title_font.render(text, True, (52, 21, 15)) # Viền Burnt Coffee
 
-        # Đổ bóng 3D cho Popup
-        pygame.draw.rect(self.screen, (20, 20, 20), (px + 10, py + 10, pop_w, pop_h), border_radius=20)
-        # Thân Popup màu Đỏ đô (BURGUNDY) sang trọng
-        pygame.draw.rect(self.screen, (144, 0, 32), (px, py, pop_w, pop_h), border_radius=20)
-        # Viền Vàng (GOLD)
-        pygame.draw.rect(self.screen, (212, 175, 55), (px, py, pop_w, pop_h), width=5, border_radius=20)
+        tx = w // 2 - body_surf.get_width() // 2
+        ty = h // 2 - body_surf.get_height() // 2 - 50
 
-        # Vẽ chữ rực rỡ
-        import math
-        # Hiệu ứng chữ nhấp nháy theo thời gian
-        glow = int(155 + 100 * math.sin(self.victory_timer * 0.2))
-        text_color = (255, glow, 100)
+        # 3. Vẽ độ dày 3D (Vẽ từ xa đến gần)
+        depth = 8
+        self.screen.blit(shadow_surf, (tx + depth + 5, ty + depth + 5))
+        for i in range(depth, 0, -1):
+            self.screen.blit(body_surf, (tx + i, ty + i))
+
+        # 4. Vẽ VIỀN để tách biệt chữ với nền
+        edge_thickness = 3 
+        for dx in range(-edge_thickness, edge_thickness + 1):
+            for dy in range(-edge_thickness, edge_thickness + 1):
+                if dx != 0 or dy != 0:
+                    self.screen.blit(outline_surf, (tx + dx, ty + dy))
+
+        # 5. Vẽ mặt chữ phát sáng nhịp thở (Pulse)
+        pulse = math.sin(self.victory_timer * 0.15) * 25
+        glow_color = (min(255, 255 + pulse), min(255, 230 + pulse), min(255, 100 + pulse))
+        top_surf = self.victory_title_font.render(text, True, glow_color)
+        self.screen.blit(top_surf, (tx, ty))
+
+        # --- 6. HIỆU ỨNG MỚI: VỆT SÁNG KIM LOẠI (GLINT) ---
+        # Tính toán vị trí vệt sáng chạy từ trái sang phải dựa trên timer
+        glint_speed = 12
+        text_w, text_h = top_surf.get_size()
+        # Vệt sáng sẽ chạy lại sau mỗi chu kỳ
+        glint_x = (self.victory_timer * glint_speed) % (text_w * 3) - text_w
         
-        title_surf = self.title_font.render("JACKPOT!", True, text_color)
-        sub_surf = self.menu_font.render("YOU CLEARED THE BOARD", True, (255, 255, 255))
+        # Tạo vệt sáng trắng mờ hình chữ nhật nghiêng
+        glint_width = 50
+        glint_surf = pygame.Surface((glint_width, text_h), pygame.SRCALPHA)
+        for i in range(glint_width):
+            # Tạo hiệu ứng gradient cho vệt sáng (sáng ở giữa, mờ ở rìa)
+            alpha = int(100 * (1 - abs(i - glint_width/2) / (glint_width/2)))
+            pygame.draw.line(glint_surf, (255, 255, 255, alpha), (i, 0), (i, text_h))
+        
+        # Nghiêng vệt sáng 25 độ cho "nghệ"
+        glint_surf = pygame.transform.rotate(glint_surf, 25)
+        
+        # Thiết lập vùng cắt (Clip) để vệt sáng chỉ hiện trên phạm vi chữ VICTORY
+        old_clip = self.screen.get_clip()
+        self.screen.set_clip(pygame.Rect(tx, ty, text_w, text_h))
+        self.screen.blit(glint_surf, (tx + glint_x, ty - 20))
+        self.screen.set_clip(old_clip)
 
-        self.screen.blit(title_surf, (w // 2 - title_surf.get_width() // 2, py + 40))
-        self.screen.blit(sub_surf, (w // 2 - sub_surf.get_width() // 2, py + 120))
+        # 7. Chữ phụ trắng tinh khôi
+        sub_msg = self.menu_font.render("YOU CLEARED THE BOARD", True, (255, 255, 255))
+        self.screen.blit(sub_msg, (w // 2 - sub_msg.get_width() // 2, ty + text_h + 20))
 
+        if self.ai_solver_mode and self.solver_result:
+            # Chỉ cần truyền tham số cơ bản, việc căn giữa và làm đẹp sẽ xử lý ở hud.py
+            draw_solver_stats(self.screen, self.hint_font, self.body_font, self.solver_result)
+
+
+    def _draw_lose_celebration(self):
+        """Vẽ màn hình thua cuộc với hiệu ứng sương khói mờ ảo."""
+        if not self.is_stuck:
+            self.lose_particles = []
+            return
+
+        w, h = self.screen.get_size()
+        self._spawn_lose_particles() # Sinh thêm khói
+
+        # 1. Overlay Burnt Coffee thẫm hơn một chút (Alpha 220)
+        lose_overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+        lose_overlay.fill((14, 20, 28, 210)) 
+        self.screen.blit(lose_overlay, (0, 0))
+
+        # 2. Vẽ các hạt sương khói (Mist)
+        for p in self.lose_particles[:]:
+            # Tạo surface riêng cho từng hạt để dùng độ trong suốt (Alpha)
+            mist_surf = pygame.Surface((p["size"]*2, p["size"]*2), pygame.SRCALPHA)
+            # Vẽ vòng tròn mờ màu Xám nhạt
+            pygame.draw.circle(mist_surf, (150, 150, 160, p["alpha"]), (p["size"], p["size"]), p["size"])
+            self.screen.blit(mist_surf, (p["pos"][0] - p["size"], p["pos"][1] - p["size"]))
+            
+            # Cập nhật vị trí và giảm tuổi thọ
+            p["pos"][0] += p["vel"][0]
+            p["pos"][1] += p["vel"][1]
+            p["life"] -= 1
+            if p["life"] <= 0 or p["pos"][0] > w + 100:
+                self.lose_particles.remove(p)
+
+        # 3. Vẽ chữ GAME OVER màu Bạc Lạnh (Giữ nguyên logic cũ của Quan)
+        msg_surf = self.victory_title_font.render("GAME OVER", True, (170, 170, 180))
+        tx = w // 2 - msg_surf.get_width() // 2
+        ty = h // 2 - 120
+        self.screen.blit(msg_surf, (tx, ty))
+
+        sub_msg = self.menu_font.render("So close! Press 'R' to try again", True, (180, 180, 180))
+        self.screen.blit(sub_msg, (w // 2 - sub_msg.get_width() // 2, ty + msg_surf.get_height() + 20))

@@ -55,6 +55,7 @@ class CardImageLoader:
         self.base_dir  = base_dir
         self.naming_fn = naming_fn or default_image_name
         self.card_size = card_size
+        self._playable_cards = set()
         self._cache: Dict[Tuple[int, str], pygame.Surface] = {}
 
     def build_card_path(self, rank: int, suit: str) -> str:
@@ -216,6 +217,10 @@ class BoardRenderer:
         self._drag_offset:  Tuple[int, int]            = (0, 0)
         self._drag_anchor:  Optional[Tuple[int, int]]  = None
         self._highlighted_card: Optional[tuple[int, str]] = None
+        self._hovered_card: Optional[Card] = None
+        self.is_dealing = False
+        self.deal_speed = 0.15 # Tốc độ bay (0.1 đến 0.3 là đẹp)
+        self.animation_queue = [] # Danh sách các lá bài đang bay
 
     # ------------------------------------------------------------------
     # Xay dung layout va surface tinh
@@ -241,9 +246,15 @@ class BoardRenderer:
 
         casc_h = self.screen_rect.height - self.cascades_y - 45
         for i in range(8):
-            x = self.margin_x + i * (self.card_w + self.slot_gap)
+            if i < 4:
+                # 4 cột đầu lấy tọa độ X của Free Cells
+                x = self.free_cell_rects[i].x
+            else:
+                # 4 cột sau lấy tọa độ X của Foundation
+                x = self.foundation_rects[i-4].x
+            
             self.cascade_rects.append(
-                pygame.Rect(x, self.cascades_y, self.card_w, casc_h)
+                pygame.Rect(x, self.cascades_y, self.card_w, 500)
             )
 
     def set_board_bg(self, bg: Optional[pygame.Surface]) -> None:
@@ -270,6 +281,27 @@ class BoardRenderer:
         self._draw_slot_group(self.free_cell_rects,  "Free Cells", color=EMERALD)
         self._draw_slot_group(self.foundation_rects, "Foundation", color=GOLD)
         self._draw_slot_group(self.cascade_rects,    "Tableau")
+
+        if self.free_cell_rects and self.foundation_rects:
+            # 1. Tính toán vị trí chính giữa khoảng hở (Center Gap)
+            mid_x = (self.free_cell_rects[-1].right + self.foundation_rects[0].left) // 2
+            
+            # 2. Xác định chiều cao của vách ngăn (nên cao hơn ô bài một chút)
+            divider_top = self.top_y - 15
+            divider_bottom = self.top_y + self.card_h + 15
+            
+            # 3. Vẽ bóng đổ nhẹ cho vách ngăn (tạo chiều sâu 3D)
+            pygame.draw.line(self._static_surface, (14, 20, 28, 100), 
+                             (mid_x + 2, divider_top + 2), (mid_x + 2, divider_bottom + 2), 3)
+            
+            # 4. Vẽ thanh ngăn chính màu Vàng Gold
+            # (212, 175, 55) là màu GOLD bạn đã dùng cho Foundation
+            pygame.draw.line(self._static_surface, (212, 175, 55), 
+                             (mid_x, divider_top), (mid_x, divider_bottom), 2)
+            
+            # 5. Thêm hai điểm nhấn (Ornament) ở đầu vách ngăn cho sang trọng
+            pygame.draw.circle(self._static_surface, (212, 175, 55), (mid_x, divider_top), 4)
+            pygame.draw.circle(self._static_surface, (212, 175, 55), (mid_x, divider_bottom), 4)
 
     def _draw_slot_group(
         self, rects: Sequence[pygame.Rect], title: str, color: Optional[tuple] = None
@@ -433,12 +465,22 @@ class BoardRenderer:
         self._drag_anchor  = (first_widget.rect.x, first_widget.rect.y)
 
     def on_mouse_motion(self, pos: Tuple[int, int]) -> None:
-        """Cap nhat vi tri nhom bai dang keo theo con tro."""
+        """Cập nhật vị trí kéo bài và xác định lá bài đang hover."""
+        self._hovered_card = None 
+        
         if self._drag_info:
-            self._drag_anchor = (
-                pos[0] - self._drag_offset[0],
-                pos[1] - self._drag_offset[1],
-            )
+            self._drag_anchor = (pos[0] - self._drag_offset[0], pos[1] - self._drag_offset[1])
+        else:
+            for card, widget in self._widgets.items():
+                if widget.rect.collidepoint(pos):
+                    self._hovered_card = card
+
+        self._playable_cards = set() 
+        if self.game and not self._drag_info:
+            moves = rules.enumerate_legal_moves(self.state)
+            for m in moves:
+                card = self._get_card_at_source(m.src_type, m.src_index)
+                if card: self._playable_cards.add(card)
 
     def on_mouse_up(self, pos: Tuple[int, int]) -> bool:
         """Tha bai: kiem tra vi tri drop hop le, neu khong thi huy keo.
@@ -500,55 +542,57 @@ class BoardRenderer:
     # ------------------------------------------------------------------
 
     def draw(self, surface: pygame.Surface) -> None:
-        """Ve toan bo ban bai len surface cho truoc."""
+        """Vẽ tối ưu: Hào quang -> Bóng đổ -> Lá bài. Bài đang kéo nằm trên cùng."""
+        # 1. Vẽ nền tĩnh
         surface.blit(self._static_surface, (0, 0))
 
-        # Tap ID cac widget dang duoc keo (khong ve o vi tri goc)
+        # 2. Xử lý Deal Animation
+        if self.is_dealing:
+            all_reached = True
+            for item in self.animation_queue:
+                if item["delay"] > 0:
+                    item["delay"] -= 1
+                    all_reached = False
+                    continue
+                w, tx, ty = item["widget"], item["target"][0], item["target"][1]
+                curr_x, curr_y = w.rect.topleft
+                w.move_to(int(curr_x + (tx - curr_x) * 0.1), int(curr_y + (ty - curr_y) * 0.1))
+                if abs(tx - curr_x) > 1 or abs(ty - curr_y) > 1: all_reached = False
+                else: w.move_to(tx, ty)
+            if all_reached: self.is_dealing = False
+
+        # Lấy danh sách ID các bài đang bị kéo để không vẽ trùng
         dragging_ids = {id(w) for w in self._drag_widgets}
+        # Đảm bảo set này tồn tại để không bị lỗi NameError
+        playable = getattr(self, "_playable_cards", set())
 
-        # Ve bai trong Free Cell
-        for card_data in self.state.free_cells:
-            if card_data:
-                w = self._widgets[card_data]
-                if id(w) not in dragging_ids:
-                    surface.blit(w.image, w.rect)
+        # 3. Hàm nội bộ để vẽ từng lá bài tĩnh
+        def _render_card_item(card_data):
+            if not card_data: return
+            w = self._widgets.get(card_data)
+            if not w or id(w) in dragging_ids: return
+            
+            # --- VẼ GLOW (Chỉ cho bài hợp lệ đang hover) ---
+            if card_data == self._hovered_card and card_data in playable:
+                self._draw_glow(surface, w.rect)
 
-        # Ve la tren cung cua moi Foundation
-        for suit_idx, suit in enumerate(("C", "D", "H", "S")):
-            top_rank = self.state.foundations[suit]
-            if top_rank > 0:
-                top_card = Card(rank=top_rank, suit=suit)
-                w = self._widgets[top_card]
-                if id(w) not in dragging_ids:
-                    surface.blit(w.image, w.rect)
+            # --- VẼ SHADOW & CARD ---
+            self.draw_card_with_shadow(surface, w.image, w.rect.topleft)
 
-        # Ve tung Cascade
+        # 4. Vẽ theo thứ tự lớp: Free Cell -> Foundation -> Tableau
+        for card in self.state.free_cells: _render_card_item(card)
+        for suit in ("C", "D", "H", "S"):
+            rank = self.state.foundations[suit]
+            if rank > 0: _render_card_item(Card(rank=rank, suit=suit))
         for cascade in self.state.cascades:
-            for card_data in cascade:
-                w = self._widgets[card_data]
-                if id(w) not in dragging_ids:
-                    surface.blit(w.image, w.rect)
+            for card in cascade: _render_card_item(card)
 
-        # Ve nhom bai dang keo (float theo con tro)
+        # 5. CUỐI CÙNG: Vẽ nhóm bài đang kéo để luôn ở trên cùng (Z-order)
         if self._drag_widgets and self._drag_anchor:
             ax, ay = self._drag_anchor
             for i, w in enumerate(self._drag_widgets):
-                w.move_to(ax, ay + i * self.card_overlap_y)
-                surface.blit(w.image, w.rect)
-
-        if self._highlighted_card is not None:
-            widget = self._get_widget_by_identity(self._highlighted_card)
-            if widget is not None:
-                highlight_rect = widget.rect.inflate(10, 10)
-                pygame.draw.rect(surface, (255, 223, 64), highlight_rect, width=4, border_radius=12)
-
-        # Hien thi so nuoc da di (goc duoi phai)
-        info = self.font_info.render(f"Moves: {getattr(self.state, 'g', 0)}", True, (255, 250, 190))
-        surface.blit(
-            info,
-            (self.screen_rect.width  - info.get_width()  - 18,
-             self.screen_rect.height - info.get_height() - 14),
-        )
+                new_pos = (ax, ay + i * self.card_overlap_y)
+                self.draw_card_with_shadow(surface, w.image, new_pos)
 
     def _pick_cards(self, source: SourceRef) -> Optional[DragInfo]:
         location, index, start = source
@@ -606,6 +650,58 @@ class BoardRenderer:
         
         # Vẽ lại hình nền và các khung ô lên tờ giấy mới
         self._rebuild_static_surface()
+
+    def draw_card_with_shadow(self, surface, card_surf, pos):
+        """Tối ưu: Vẽ shadow trực tiếp bằng cách fill vùng thay vì tạo Surface mới."""
+        # Tạo bóng đổ lệch 4px màu tối
+        shadow_rect = pygame.Rect(pos[0] + 4, pos[1] + 4, card_surf.get_width(), card_surf.get_height())
+        # Vẽ một hình chữ nhật đen mờ nhanh (không cần tạo Surface phức tạp mỗi frame)
+        s = pygame.Surface((card_surf.get_width(), card_surf.get_height()), pygame.SRCALPHA)
+        s.fill((0, 0, 0, 80)) 
+        surface.blit(s, shadow_rect.topleft)
+        surface.blit(card_surf, pos)
+
+    def _draw_glow(self, surface, rect):
+        """Vẽ hào quang vàng tỏa ra từ phía sau lá bài."""
+        # Tạo surface hào quang to hơn lá bài
+        glow_surf = pygame.Surface((rect.width + 20, rect.height + 20), pygame.SRCALPHA)
+        for i in range(8, 0, -1):
+            alpha = 70 - (i * 8)
+            # Màu Gold nhạt tỏa rộng dần
+            pygame.draw.rect(glow_surf, (255, 223, 100, alpha), 
+                             (10-i, 10-i, rect.width + i*2, rect.height + i*2), border_radius=12)
+        surface.blit(glow_surf, (rect.x - 10, rect.y - 10))
+
+    def _get_card_at_source(self, src_type, src_index): 
+        """Hàm phụ trợ để lấy đối tượng Card từ tọa độ logic."""
+        if src_type == rules.LOCATION_FREE_CELL:
+            return self.state.free_cells[src_index]
+        elif src_type == rules.LOCATION_CASCADE:
+            if self.state.cascades[src_index]:
+                return self.state.cascades[src_index][-1]
+        return None
+
+    def start_deal_animation(self, state: State):
+        """Khởi tạo chia bài theo thứ tự (Sequential Deal)."""
+        self.apply_state(state)
+        self.is_dealing = True
+        self.animation_queue = []
+        
+        center_x = self.screen_rect.width // 2
+        center_y = -self.card_h # Bài bay từ cạnh trên màn hình xuống sẽ sinh động hơn
+        
+        final_positions = self.get_card_positions(state)
+        
+        # Sắp xếp bài theo thứ tự để chia từng cột từ trái sang phải
+        for i, (card, target_pos) in enumerate(final_positions.items()):
+            widget = self.get_widget(card)
+            if widget:
+                widget.rect.topleft = (center_x, center_y)
+                self.animation_queue.append({
+                    "widget": widget,
+                    "target": target_pos,
+                    "delay": i * 2 # Mỗi lá bài chờ 2 frame rồi mới bay
+                })
 
 def _suit_short_to_long(suit: str) -> str:
     return {"H": "hearts", "D": "diamonds", "C": "clubs", "S": "spades"}[suit]
