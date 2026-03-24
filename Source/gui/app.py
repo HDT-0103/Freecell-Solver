@@ -621,6 +621,13 @@ class FreeCellApp:
                     f"{total_steps} steps, "
                     f"{result.metrics.elapsed_seconds:.2f}s"
                 )
+            elif hasattr(result, "metrics"):
+                total_steps = self._ai_total_applied_moves + result.metrics.solution_steps
+                self.solver_message = (
+                    f"{self.solver_label}: {name} - "
+                    f"{total_steps} steps, "
+                    f"{result.metrics.expanded_nodes} expanded"
+                )
             else:
                 total_steps = self._ai_total_applied_moves + len(result.moves)
                 self.solver_message = (
