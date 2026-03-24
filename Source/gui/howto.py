@@ -42,6 +42,21 @@ class HowToScreen:
         self.bg_image   = bg_image
         self.page       = 0
         self._shimmer   = 0.0   # 0..1 phase for gold shimmer on page 0
+        self.page0_bg = None 
+        
+        # 2. Định nghĩa đường dẫn và nạp ảnh
+        # Giả sử ảnh nằm cùng cấp với background.jpg (thư mục cha của thư mục Source)
+        p0_path = os.path.join(os.path.dirname(__file__), "..", "..", "howto_p0_bg.jpg")
+        
+        if os.path.exists(p0_path):
+            try:
+                self.page0_bg = pygame.image.load(p0_path).convert()
+                # Bạn có thể scale luôn ở đây để đảm bảo nó khớp với màn hình
+                self.page0_bg = pygame.transform.scale(self.page0_bg, self.screen.get_size())
+            except Exception as e:
+                print(f"Error loading page 0 background: {e}")
+        # ------------------------------
+
         self._build_buttons()
 
     # ── public ─────────────────────────────────────────────────────────────────
@@ -54,35 +69,58 @@ class HowToScreen:
 
     def _build_buttons(self) -> None:
         w, h   = self.screen.get_width(), self.screen.get_height()
+        pr = self._paper_rect()
         bw, bh = 150, 48
         # buttons sit BOTTOM_RESERVED px from the bottom, page indicator below them
         by = h - BOTTOM_RESERVED + 4
 
-        kw = {"base_color": EMERALD, "hover_color": EMERALD_HOV, "text_color": GOLD}
+        btn_y = pr.bottom - bh - 30 
+        
+        self.btn_prev = Button(text="Prev", 
+                               rect=pygame.Rect(pr.x + 20, btn_y, bw, bh),
+                               base_color=EMERALD, hover_color=EMERALD_HOV, text_color=GOLD)
+        
+        self.btn_next = Button(text="Next", 
+                               rect=pygame.Rect(pr.right - bw - 20, btn_y, bw, bh),
+                               base_color=EMERALD, hover_color=EMERALD_HOV, text_color=GOLD)
 
-        self.btn_back = Button(text="Back",
-                               rect=pygame.Rect(24, by, bw, bh), **kw)
-        self.btn_prev = Button(text="Prev",
-                               rect=pygame.Rect(w // 2 - bw - 8, by, bw, bh), **kw)
-        self.btn_next = Button(text="Next",
-                               rect=pygame.Rect(w // 2 + 8, by, bw, bh), **kw)
+        # Nút Back hình tròn nên ta định nghĩa rect vuông ở giữa dưới
+        self.btn_back = Button(text="", 
+                               rect=pygame.Rect(w // 2 - 40, h - 90, 80, 80),
+                               base_color=EMERALD, hover_color=EMERALD_HOV, text_color=GOLD)
+
+    # ── paper rect (tờ giấy trong background) ─────────────────────────────────
+
+    def _paper_rect(self) -> pygame.Rect:
+        """Trả về vùng tờ giấy tính theo tỉ lệ màn hình."""
+        w, h = self.screen.get_width(), self.screen.get_height()
+        x  = int(w * 0.11)
+        y  = int(h * 0.15)
+        pw = int(w * 0.78)
+        ph = int(h * 0.64)
+        return pygame.Rect(x, y, pw, ph)
 
     # ── content area (excludes bottom reserved zone) ────────────────────────────
 
     def _content_h(self) -> int:
         """Usable height for page content (excludes title and bottom area)."""
-        return self.screen.get_height() - BOTTOM_RESERVED
+        return self._paper_rect().bottom - BOTTOM_RESERVED
 
     # ── internal draw helpers ───────────────────────────────────────────────────
 
     def _draw_bg(self) -> None:
-        w, h = self.screen.get_width(), self.screen.get_height()
-        if self.bg_image:
-            bg = pygame.transform.scale(self.bg_image, (w, h))
-            self.screen.blit(bg, (0, 0))
-            # FIX 1: no dark overlay — show background as-is
-        else:
-            self.screen.fill((10, 60, 35))
+            w, h = self.screen.get_width(), self.screen.get_height()
+        
+            if self.page == 0 and self.page0_bg:
+                bg = pygame.transform.scale(self.page0_bg, (w, h))
+                self.screen.blit(bg, (0, 0))
+        
+            elif self.bg_image:
+                bg = pygame.transform.scale(self.bg_image, (w, h))
+                self.screen.blit(bg, (0, 0))
+            
+            else:
+                self.screen.fill((10, 60, 35))
 
     def _draw_btn(self, btn: Button, visible: bool = True) -> None:
         if not visible:
@@ -91,65 +129,79 @@ class HowToScreen:
         btn.draw(self.screen, self.hint_font, mp)
         pygame.draw.rect(self.screen, GOLD, btn.rect, width=2, border_radius=10)
 
-    def _draw_back_door_btn(self, btn: Button, visible: bool = True) -> None:
-        """Nút back: nền đỏ nhung, viền gold, icon người đi ra cửa."""
-        if not visible:
-            return
-        VELVET_RED = (140,  25,  25)
-        VELVET_HOV = (175,  40,  40)
-        mp = pygame.mouse.get_pos()
-        is_hover = btn.rect.collidepoint(mp)
-        fill = VELVET_HOV if is_hover else VELVET_RED
-        pygame.draw.rect(self.screen, fill, btn.rect, border_radius=10)
-        pygame.draw.rect(self.screen, GOLD, btn.rect, width=2, border_radius=10)
+    def _draw_back_btn(self, btn: Button, visible: bool = True) -> None:
+            if not visible: return
+            mp = pygame.mouse.get_pos()
+            is_hover = btn.rect.collidepoint(mp)
+            center = btn.rect.center
+            radius = btn.rect.width // 2
 
-        lbl  = self.hint_font.render("Back", True, GOLD)
-        shad = self.hint_font.render("Back", True, (0, 0, 0))
-        lx = btn.rect.centerx - lbl.get_width() // 2
-        ly = btn.rect.centery - lbl.get_height() // 2
-        self.screen.blit(shad, (lx + 1, ly + 1))
-        self.screen.blit(lbl,  (lx,     ly))
+            # 1. Vẽ nền tròn đỏ đô
+            color = (180, 0, 40) if is_hover else (144, 0, 32)
+            pygame.draw.circle(self.screen, color, center, radius)
+            # 2. Vẽ viền vàng
+            pygame.draw.circle(self.screen, GOLD, center, radius, width=4)
 
-    def _title(self, text: str, y: int = 14) -> int:
-        """Draw page title; return y just below it."""
+            pygame.draw.circle(self.screen, GOLD, center, radius, width=3)
+
+            # 3. Vẽ icon ngôi nhà màu Gold (CHỈNH SỬA: NGẮN HƠN)
+            # 3.1 Vẽ Mái nhà (Hạ thấp đỉnh mái xuống 2px)
+            # Cũ: Đỉnh mái center[1]-10 -> NHÔ CAO QUÁ (kệch cỡm)
+            # Mới: Đỉnh mái center[1]-8  -> NGẮN HƠN, bớt awkward
+            pygame.draw.polygon(self.screen, GOLD, [
+                (center[0], center[1] - 8),       # Đỉnh mái lowered (less nhọn)
+                (center[0] - 16, center[1] + 2),  # Chân trái rộng hơn
+                (center[0] + 16, center[1] + 2)   # Chân phải rộng hơn
+            ])
+        
+            # 3.2 Vẽ Thân nhà (Thấp hơn: cao 9px thay vì 11px)
+            # Rect = (center[0]-12, center[1]+2, 24, 9)
+            # Thấp hơn: cao 9px, không còn cảm giác bị "vươn" lên.
+            pygame.draw.rect(self.screen, GOLD, (center[0] - 12, center[1] + 2, 24, 9))
+
+            # 3.3 Vẽ cửa sổ nhỏ (O-ho)
+            pygame.draw.rect(self.screen, color, (center[0] - 4, center[1] + 4, 8, 7))
+
+    def _title(self, text: str, y: int = None) -> int:
+        """Draw page title inside paper; return y just below it."""
+        pr   = self._paper_rect()
         w    = self.screen.get_width()
+        y    = y if y is not None else pr.y + 14
         font = self.title_font
         surf = font.render(text, True, GOLD)
-        if surf.get_width() > w - 24:
+        if surf.get_width() > pr.width - 24:
             font = pygame.font.SysFont("georgia", 34, bold=True)
             surf = font.render(text, True, GOLD)
         shad = font.render(text, True, (40, 20, 0))
-        x = w // 2 - surf.get_width() // 2
+        x = pr.centerx - surf.get_width() // 2
         self.screen.blit(shad, (x + 2, y + 2))
         self.screen.blit(surf,  (x,     y))
         return y + surf.get_height() + 8
 
     def _text(self, text: str, y: int, color=WHITE, center: bool = True,
               font: pygame.font.Font = None) -> int:
-        """Render one line; return y for the next line."""
-        f = font or self.body_font
-        s = f.render(text, True, color)
-        w = self.screen.get_width()
-        x = w // 2 - s.get_width() // 2 if center else 30
+        """Render one line inside paper; return y for the next line."""
+        f  = font or self.body_font
+        pr = self._paper_rect()
+        s  = f.render(text, True, color)
+        x  = pr.centerx - s.get_width() // 2 if center else pr.x + 16
         self.screen.blit(s, (x, y))
         return y + s.get_height() + 8
 
     def _text_wrapped(self, text: str, y: int, color=WHITE,
                       font: pygame.font.Font = None,
                       max_width: int = None) -> int:
-        """Render text, auto-wrapping if wider than max_width. Returns next y."""
-        f   = font or self.body_font
-        w   = self.screen.get_width()
-        mw  = (max_width or w) - 40   # 20px padding each side
+        """Render text wrapped inside paper. Returns next y."""
+        f  = font or self.body_font
+        pr = self._paper_rect()
+        mw = max_width or (pr.width - 32)
 
-        # try single line first
         surf = f.render(text, True, color)
         if surf.get_width() <= mw:
-            x = w // 2 - surf.get_width() // 2
+            x = pr.centerx - surf.get_width() // 2
             self.screen.blit(surf, (x, y))
             return y + surf.get_height() + 8
 
-        # wrap by words
         words = text.split()
         lines, cur = [], ""
         for word in words:
@@ -165,7 +217,7 @@ class HowToScreen:
 
         for line in lines:
             s = f.render(line, True, color)
-            x = w // 2 - s.get_width() // 2
+            x = pr.centerx - s.get_width() // 2
             self.screen.blit(s, (x, y))
             y += s.get_height() + 6
         return y + 4
@@ -237,201 +289,189 @@ class HowToScreen:
     # ── FIX 2: shimmering gold title for page 0 ────────────────────────────────
 
     def _shimmer_title(self, text: str) -> None:
-        """Render 'HOW TO PLAY' centred vertically with a gold shimmer effect."""
-        w, h = self.screen.get_width(), self.screen.get_height()
-
-        # advance shimmer phase
+        """Render 'HOW TO PLAY' centred within paper with a gold shimmer effect."""
+        pr = self._paper_rect()
         self._shimmer = (self._shimmer + 0.018) % 1.0
         t = self._shimmer
-
-        # three layers: dark shadow, base gold, bright highlight strip
-        layers = [
-            ((50, 25, 0),    (2,  2)),   # shadow
-            (GOLD,           (0,  0)),   # base
-        ]
-
-        # interpolate a bright sweep colour across the text
         bright_alpha = int(180 * abs(math.sin(t * math.pi)))
         bright_col   = (
             min(255, GOLD[0] + 43),
             min(255, GOLD[1] + 70),
             min(255, GOLD[2] + 105),
         )
-
         font = self.title_font
+        font = pygame.font.SysFont("georgia", 34, bold=True)
         base_surf = font.render(text, True, GOLD)
-        tw = base_surf.get_width()
-        ty = h // 2 - base_surf.get_height() // 2
+        tw = base_surf.get_width() - 10
+        ty = pr.centery - base_surf.get_height() // 2 + 190
+        tx = pr.centerx - tw // 2
 
+        layers = [((50, 25, 0), (2, 2)), (GOLD, (0, 0))]
         for color, (ox, oy) in layers:
             s = font.render(text, True, color)
-            self.screen.blit(s, (w // 2 - tw // 2 + ox, ty + oy))
+            self.screen.blit(s, (tx + ox, ty + oy))
 
-        # bright shimmer strip overlay
         hi_surf = font.render(text, True, bright_col)
         hi_surf.set_alpha(bright_alpha)
-        self.screen.blit(hi_surf, (w // 2 - tw // 2, ty))
+        self.screen.blit(hi_surf, (tx, ty))
 
     # ── page renderers ─────────────────────────────────────────────────────────
 
     def _page0(self) -> None:
-        """FIX 2: Title only, centred, with shimmer."""
-        self._shimmer_title("HOW TO PLAY")
+            if self.page0_bg:
+                bg = pygame.transform.scale(self.page0_bg, self.screen.get_size())
+                self.screen.blit(bg, (0, 0))
+            self._shimmer_title("INSTRUCTION")
+
+    def _get_title_rect(self) -> pygame.Rect:
+            pr = self._paper_rect()
+       
+            width, height = 300, 60
+        
+            return pygame.Rect(
+                pr.centerx - width // 2, 
+                pr.centery - height // 2 + 180, 
+                width, 
+                height
+            )
 
     def _page1(self) -> None:
-        """Board layout — proportional spacing."""
-        w, h  = self.screen.get_width(), self.screen.get_height()
-        ch_   = self._content_h()
+        """Board layout — inside paper."""
+        pr = self._paper_rect()
+        w  = self.screen.get_width()
 
         title_bot = self._title("The Board Layout")
 
-        BLUE_C   = ( 40, 100, 220)   # deep blue for Free Cells (was red)
+        BLUE_C   = ( 40, 100, 220)
         YELLOW_C = (218, 180,   0)
         GREEN_C  = ( 30, 160,  80)
 
-        # Row 1: Free Cells + Foundations — pushed down more
-        cw, ch = 68, 90
-        gap     = 8
-        row1_y  = title_bot + int(ch_ * 0.14)   # was 0.04 → pushed down
+        cw, ch = 62, 82
+        gap    = 6
+        row1_y = title_bot + 12
 
+        # Free Cells — left half of paper
         fc_total = 4 * cw + 3 * gap
-        fc_x0    = w // 4 - fc_total // 2
+        fc_x0    = pr.x + pr.width // 4 - fc_total // 2
         for i in range(4):
             self._empty_cell(fc_x0 + i * (cw + gap), row1_y, cw, ch, BLUE_C)
         lfc = self.hint_font.render("Free Cells (4)", True, BLUE_C)
         self.screen.blit(lfc, (fc_x0, row1_y + ch + 4))
 
-        fd_x0 = w * 3 // 4 - fc_total // 2
+        # Foundations — right half of paper
+        fd_x0 = pr.x + pr.width * 3 // 4 - fc_total // 2
         for i, (suit, red) in enumerate([("S", False), ("H", True), ("C", False), ("D", True)]):
             x = fd_x0 + i * (cw + gap)
             self._empty_cell(x, row1_y, cw, ch, YELLOW_C)
-            self._suit_symbol(x + cw // 2, row1_y + ch // 2, 15, suit, YELLOW_C)
+            self._suit_symbol(x + cw // 2, row1_y + ch // 2, 14, suit, YELLOW_C)
         lfd = self.hint_font.render("Foundations (4)", True, YELLOW_C)
         self.screen.blit(lfd, (fd_x0, row1_y + ch + 4))
 
-        # Row 2: Tableau
-        tab_y   = row1_y + ch + int(ch_ * 0.09)
-        tcw     = max(38, (w - 60) // 9)
-        tab_tot = 8 * tcw + 7 * 8
-        tab_x0  = w // 2 - tab_tot // 2
+        # Tableau
+        tab_y  = row1_y + ch + 44
+        tcw    = max(36, (pr.width - 40) // 9)
+        tab_tot = 8 * tcw + 7 * 6
+        tab_x0 = pr.centerx - tab_tot // 2
         for i in range(8):
-            self._empty_cell(tab_x0 + i * (tcw + 8), tab_y, tcw, ch + 10, GREEN_C)
+            self._empty_cell(tab_x0 + i * (tcw + 6), tab_y, tcw, ch, GREEN_C)
         ltab = self.hint_font.render("Tableau  -  8 columns (52 cards dealt here)", True, GREEN_C)
-        self.screen.blit(ltab, (w // 2 - ltab.get_width() // 2, tab_y + ch + 16))
+        self.screen.blit(ltab, (pr.centerx - ltab.get_width() // 2, tab_y + ch + 6))
 
-        # Notes — no overlay, just text
+        # Notes
         notes = [
-            ("Free Cells",  "Temp storage  -  park a card to unblock others", BLUE_C),
-            ("Foundations", "Goal piles  -  build A to K by suit",            YELLOW_C),
-            ("Tableau",     "8 columns  -  main play area",                   GREEN_C),
+            ("Free Cells",  "Temp storage - park a card", BLUE_C),
+            ("Foundations", "Goal piles - build A to K by suit",            YELLOW_C),
+            ("Tableau",     "8 columns - main play area",                   GREEN_C),
         ]
-        ny = tab_y + ch + int(ch_ * 0.13)
+        ny = tab_y + ch + 80
         for name, desc, c in notes:
             s = self.hint_font.render(f"  {name}:  {desc}", True, c)
-            self.screen.blit(s, (w // 2 - s.get_width() // 2, ny))
+            self.screen.blit(s, (pr.centerx - s.get_width() // 2, ny))
             ny += 28
 
     def _page2(self) -> None:
-        """Movement rules."""
-        w, h  = self.screen.get_width(), self.screen.get_height()
-        ch_   = self._content_h()
+        pr = self._paper_rect()
 
         title_bot = self._title("Movement Rules")
-        card_y    = title_bot + int(ch_ * 0.05)
+        card_y    = title_bot + 50        
 
         cw, ch = 88, 122
 
-        # 10 of Spades (black)
-        self._card(w // 2 - cw // 2 - 30, card_y, cw, ch, "10", "S", red=False)
-        # 9 of Hearts (red) on top
-        self._card(w // 2 - cw // 2 + 30, card_y + 30, cw, ch, "9", "H", red=True)
+        self._card(pr.centerx - cw + 10, card_y, cw, ch, "10", "S", red=False)
+        self._card(pr.centerx - cw + 50, card_y + 30, cw, ch, "9", "H", red=True)
 
-        # Green tick
-        tx, ty = w // 2 + cw + 24, card_y + 16
-        pygame.draw.line(self.screen, (50, 210, 70), (tx,      ty + 28), (tx + 16, ty + 50), 7)
-        pygame.draw.line(self.screen, (50, 210, 70), (tx + 16, ty + 50), (tx + 44, ty),       7)
+        y = card_y + ch + 50            
 
-        y = card_y + ch + int(ch_ * 0.1)
         rules = [
-            ("1.  The card ON TOP must be a DIFFERENT colour.", WHITE),
-            ("2.  The card ON TOP must be ONE rank LOWER.",     WHITE),
+            ("1.  The card ON TOP must be a DIFFERENT colour.", (20, 20, 20)),
+            ("2.  The card ON TOP must be ONE rank LOWER.",     (20, 20, 20)),
             ("",                                                 WHITE),
-            ("e.g.   9-Hearts (Red)  on  10-Spades (Black)  +", GOLD_LIGHT),
-            ("       9-Spades (Black) on  10-Hearts (Red)   +",  GOLD_LIGHT),
+            ("e.g.   9-Hearts (Red)  on  10-Spades (Black)  +", (180, 60, 60)),  
+            ("       9-Spades (Black) on  10-Hearts (Red)   +",  (180, 60, 60)),
         ]
         for line, color in rules:
             if not line:
                 y += 8
                 continue
-            y = self._text_wrapped(line, y, color)
+            y = self._text_wrapped(line, y, color, font=self.body_font)
 
     def _page3(self) -> None:
-        """Free Cell strategy."""
-        w, h  = self.screen.get_width(), self.screen.get_height()
-        ch_   = self._content_h()
+        """Free Cell strategy — inside paper."""
+        pr = self._paper_rect()
 
         title_bot = self._title("Free Cell Strategy")
-        start_y   = title_bot + int(ch_ * 0.04)
+        start_y   = title_bot + 18
 
         cw, ch = 76, 105
-        pile_x = w // 4 - cw // 2
+        pile_x = pr.x + pr.width // 4 - cw // 2
 
-        # Messy pile
         for i, (rank, suit, red) in enumerate([("K","S",False), ("5","D",True), ("J","C",False)]):
             self._card(pile_x, start_y + i * 24, cw, ch, rank, suit, red)
 
-        # Empty Free Cell — cyan/teal instead of red (avoids blending with background)
-        fc_x = w * 2 // 3
-        fc_y = start_y + 16
-        FC_COLOR = (0, 200, 210)
-        self._empty_cell(fc_x, fc_y, cw, ch, FC_COLOR)
-        lfc = self.hint_font.render("Free Cell", True, FC_COLOR)
+        fc_x = pr.x + pr.width * 2 // 3
+        fc_y = start_y + 10
+        self._empty_cell(fc_x, fc_y, cw, ch, ( 40, 100, 220))
+        lfc = self.hint_font.render("Free Cell", True, ( 40, 100, 220))
         self.screen.blit(lfc, (fc_x + cw // 2 - lfc.get_width() // 2, fc_y + ch + 4))
 
-        # Arrow
         self._arrow(
             (pile_x + cw,  start_y + 48 + 24),
             (fc_x,         fc_y + ch // 2),
         )
 
-        # Freed card
         freed_y = start_y + 48 + ch
         self._card(pile_x, freed_y, cw, ch, "5", "D", red=True)
         lf = self.hint_font.render("Now free to move!", True, (80, 220, 120))
         self.screen.blit(lf, (pile_x, freed_y + ch + 4))
 
-        # Tips — no overlay
         tips = [
             "Park a blocking card in a Free Cell to unblock others.",
             "Retrieve it later when needed.",
             "Warning: only 4 slots  -  use them wisely!",
         ]
-        ty = freed_y + ch + int(ch_ * 0.1)
+        ty = freed_y + ch + 30
         for tip in tips:
-            ty = self._text_wrapped(tip, ty, GOLD_LIGHT)
+            ty = self._text_wrapped(tip, ty, (20, 20, 20))
 
     def _page4(self) -> None:
-        """Goal and winning."""
-        w, h  = self.screen.get_width(), self.screen.get_height()
-        ch_   = self._content_h()
+        """Goal and winning — inside paper."""
+        pr = self._paper_rect()
 
         title_bot = self._title("The Goal  -  Win!")
-        card_y    = title_bot + int(ch_ * 0.04)
+        card_y    = title_bot + 30
 
         cw, ch = 90, 125
-        cx     = w // 2 - 50
+        cx     = pr.centerx - 20
 
-        # Foundation cell with Ace inside
         self._empty_cell(cx - cw // 2, card_y, cw, ch, (218, 180, 0))
         self._card(cx - cw // 2 + 4, card_y + 4, cw - 8, ch - 8, "A", "H", red=True)
 
-        # 2 of Hearts flying in
-        c2x = cx + cw + 50
-        c2y = card_y - 20
+        c2x = cx + cw + 30
+        c2y = card_y - 10
         self._card(c2x, c2y, cw, ch, "2", "H", red=True)
         self._arrow((c2x, c2y + ch // 2), (cx + cw // 2, card_y + ch // 2))
 
-        y = card_y + ch + int(ch_ * 0.08)
+        y = card_y + ch + 30
         goals = [
             "A  2  3  4  5  6  7  8  9  10  J  Q  K",
             "",
@@ -442,47 +482,67 @@ class HowToScreen:
             if not g:
                 y += 8
                 continue
-            color = GOLD_LIGHT if g.startswith("A  2") else WHITE
+            color = (144, 0, 32) if g.startswith("A  2") else (30, 30, 30)
             y = self._text_wrapped(g, y, color)
 
     # ── main draw & event ──────────────────────────────────────────────────────
 
     def draw(self) -> None:
-        self._draw_bg()
+            # 1. Vẽ hình nền (Tự động chọn nền Page 0 hoặc nền chung)
+            self._draw_bg()
 
-        {0: self._page0, 1: self._page1, 2: self._page2,
-         3: self._page3, 4: self._page4}[self.page]()
+            # 2. Vẽ nội dung trang hiện tại
+            pages = {
+                0: self._page0, 1: self._page1, 2: self._page2,
+                3: self._page3, 4: self._page4
+            }
+            pages[self.page]()
 
-        w, h = self.screen.get_width(), self.screen.get_height()
+            # Các biến kiểm soát trạng thái trang
+            is_p0 = (self.page == 0)
+            is_last = (self.page == TOTAL_PAGES - 1)
+            w, h = self.screen.get_width(), self.screen.get_height()
 
-        # FIX 3: page indicator sits below the buttons, well above screen edge
-        pf = self.hint_font.render(f"{self.page + 1} / {TOTAL_PAGES}", True, GOLD)
-        self.screen.blit(pf, (w // 2 - pf.get_width() // 2,
-                               h - BOTTOM_RESERVED + 58))
+            # 3. Vẽ Page Indicator (Chỉ hiện từ trang 1 trở đi để trang 0 sạch đẹp)
+            if not is_p0:
+                pf = self.hint_font.render(f"{self.page} / {TOTAL_PAGES - 1}", True, GOLD)
+                # Đặt số trang nằm ngay trên nút Back một chút
+                self.screen.blit(pf, (w // 2 - pf.get_width() // 2, h - BOTTOM_RESERVED - 10))
 
-        is_first = self.page == 0
-        is_last  = self.page == TOTAL_PAGES - 1
+            # 4. Điều khiển hiển thị các nút điều hướng
+            # Trang 0: Không hiện nút nào (người dùng click vào tiêu đề để bắt đầu)
+            # Trang 1-4: Hiện Prev, Next (nếu không phải trang cuối), và nút Home
+            if not is_p0:
+                # Vẽ nút Next (ẩn ở trang cuối cùng)
+                self._draw_btn(self.btn_next, visible=not is_last)
+            
+                # Vẽ nút Prev (luôn hiện từ trang 1)
+                self._draw_btn(self.btn_prev, visible=True)
+            
+                # Vẽ nút Back hình tròn (ngôi nhà) ở giữa dưới
+                self._draw_back_btn(self.btn_back, visible=True)
 
-        self._draw_btn(self.btn_next, visible=not is_last)
-        self._draw_btn(self.btn_prev, visible=not is_first)
-        self._draw_back_door_btn(self.btn_back, visible=not is_first)
+    def handle_event(self, event, on_back) -> None:
+            # 1. XỬ LÝ PHÍM ESC (Bổ sung mới)
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self.page = 0  # Reset về trang đầu để lần sau mở lại đúng trang bìa
+                    on_back()      # Quay về Menu
+                    return
 
-    def handle_event(self, event: pygame.event.Event, on_back) -> None:
-        if event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_ESCAPE, pygame.K_b):
-                self.page = 0
-                on_back()
-            elif event.key == pygame.K_RIGHT and self.page < TOTAL_PAGES - 1:
-                self.page += 1
-            elif event.key == pygame.K_LEFT and self.page > 0:
-                self.page -= 1
+            # 2. XỬ LÝ CHUỘT (Giữ nguyên hoặc chỉnh sửa logic cũ)
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if self.page == 0:
+                    # Nhấn vào chữ Instruction để vào trang 1
+                    if self._get_title_rect().collidepoint(event.pos):
+                        self.page = 1 
+                    return 
 
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            pos = event.pos
-            if self.btn_next.rect.collidepoint(pos) and self.page < TOTAL_PAGES - 1:
-                self.page += 1
-            elif self.btn_prev.rect.collidepoint(pos) and self.page > 0:
-                self.page -= 1
-            elif self.btn_back.rect.collidepoint(pos) and self.page > 0:
-                self.page = 0
-                on_back()
+                # Các nút điều hướng ở trang 1-4
+                if self.btn_next.rect.collidepoint(event.pos) and self.page < TOTAL_PAGES - 1:
+                    self.page += 1
+                elif self.btn_prev.rect.collidepoint(event.pos) and self.page > 0:
+                    self.page -= 1
+                elif self.btn_back.rect.collidepoint(event.pos):
+                    self.page = 0
+                    on_back()
