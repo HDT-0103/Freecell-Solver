@@ -4,21 +4,24 @@ import pygame
 
 from core import rules
 from core.state import State
-from solvers.ucs import UCSSearchResult
 
 
 def draw_solver_stats(
     screen: pygame.Surface,
     hint_font: pygame.font.Font,
     body_font: pygame.font.Font,
-    solver_result: UCSSearchResult | None,
+    solver_result,
+    solver_name: str = "Solver",
 ) -> None:
     if solver_result is None:
         return
 
-    metrics = solver_result.metrics
+    metrics = getattr(solver_result, "metrics", None)
+    if metrics is None:
+        return
+
     lines = [
-        "UCS Metrics",
+        f"{solver_name} Metrics",
         f"Time: {metrics.elapsed_seconds:.3f} s",
         f"Nodes: {metrics.expanded_nodes}",
         f"Memory: {metrics.peak_memory_mb:.2f} MB",

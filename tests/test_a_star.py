@@ -96,6 +96,21 @@ def test_solve_a_star_supports_custom_callable_heuristic():
     assert result.heuristic_name == '<lambda>'
 
 
+def test_solve_a_star_populates_metrics_for_gui_stats():
+    initial_state = State(
+        cascades=[[Card(13, 'S')], [], [], [], [], [], [], []],
+        free_cells=[None, None, None, None],
+        foundations={'H': 13, 'D': 13, 'C': 13, 'S': 12},
+    )
+
+    result = solve_a_star(initial_state, heuristic='foundation_gap')
+
+    assert result.metrics.elapsed_seconds >= 0.0
+    assert result.metrics.peak_memory_bytes >= 0
+    assert result.metrics.expanded_nodes == result.expanded_nodes
+    assert result.metrics.solution_steps == len(result.moves)
+
+
 def test_solve_a_star_reports_unsolved_when_node_budget_is_zero():
     initial_state = State(
         cascades=[[Card(12, 'S')], [Card(13, 'S')], [], [], [], [], [], []],

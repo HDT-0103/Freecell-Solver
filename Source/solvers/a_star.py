@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import heapq
 import time
+import tracemalloc
 from dataclasses import dataclass
 from itertools import count
 from typing import Callable, TypeAlias
@@ -10,10 +11,12 @@ try:
     from core import rules
     from core.rules import Move
     from core.state import State
+    from utils.metrics import SearchMetrics
 except ModuleNotFoundError:
     from Source.core import rules
     from Source.core.rules import Move
     from Source.core.state import State
+    from Source.utils.metrics import SearchMetrics
 
 
 Heuristic = Callable[[State], int]
@@ -31,6 +34,7 @@ class AStarResult:
     expanded_nodes: int
     generated_nodes: int
     heuristic_name: str
+    metrics: SearchMetrics
 
 
 def _card_identity(card) -> tuple[int, int]:
@@ -132,6 +136,8 @@ def _build_result(
     expanded_nodes: int,
     generated_nodes: int,
     heuristic_name: str,
+    elapsed_seconds: float,
+    peak_memory_bytes: int,
 ) -> AStarResult:
     moves, state_path = reconstruct_solution(state)
     return AStarResult(
@@ -141,6 +147,12 @@ def _build_result(
         expanded_nodes=expanded_nodes,
         generated_nodes=generated_nodes,
         heuristic_name=heuristic_name,
+        metrics=SearchMetrics(
+            elapsed_seconds=elapsed_seconds,
+            peak_memory_bytes=peak_memory_bytes,
+            expanded_nodes=expanded_nodes,
+            solution_steps=len(moves),
+        ),
     )
 
 
@@ -189,6 +201,8 @@ class AStarSearchSession:
         self.generated_nodes = 1
         self.best_state = start
         self.best_progress = _progress_score(start)
+        self.elapsed_seconds = 0.0
+        self.peak_memory_bytes = 0
         self._solved_state: State | None = start if rules.is_goal(start) else None
         self._exhausted = False
 
@@ -207,83 +221,117 @@ class AStarSearchSession:
     def exhausted(self) -> bool:
         return self._exhausted
 
+    def _update_measurements(self, *, advance_begin: float, stop_tracing: bool) -> None:
+        self.elapsed_seconds += time.perf_counter() - advance_begin
+        if tracemalloc.is_tracing():
+            _, peak = tracemalloc.get_traced_memory()
+            self.peak_memory_bytes = max(self.peak_memory_bytes, peak)
+            if stop_tracing:
+                tracemalloc.stop()
+
+    def _finalize_advance(
+        self,
+        *,
+        state: State,
+        solved: bool,
+        advance_begin: float,
+        stop_tracing: bool,
+    ) -> AStarResult:
+        self._update_measurements(advance_begin=advance_begin, stop_tracing=stop_tracing)
+        return _build_result(
+            state=state,
+            solved=solved,
+            expanded_nodes=self.expanded_nodes,
+            generated_nodes=self.generated_nodes,
+            heuristic_name=self.heuristic_name,
+            elapsed_seconds=self.elapsed_seconds,
+            peak_memory_bytes=self.peak_memory_bytes,
+        )
+
     def advance(
         self,
         *,
         max_nodes: int | None = None,
         max_time_seconds: float | None = None,
     ) -> AStarResult:
+        stop_tracing = False
+        if not tracemalloc.is_tracing():
+            tracemalloc.start()
+            stop_tracing = True
+        advance_begin = time.perf_counter()
+
         if self._solved_state is not None:
-            return _build_result(
+            return self._finalize_advance(
                 state=self._solved_state,
                 solved=True,
-                expanded_nodes=self.expanded_nodes,
-                generated_nodes=self.generated_nodes,
-                heuristic_name=self.heuristic_name,
+                advance_begin=advance_begin,
+                stop_tracing=stop_tracing,
             )
 
         step_begin = time.perf_counter()
         step_expanded = 0
 
-        while self.frontier:
-            if max_time_seconds is not None and (time.perf_counter() - step_begin) >= max_time_seconds:
-                break
-            if max_nodes is not None and step_expanded >= max_nodes:
-                break
+        try:
+            while self.frontier:
+                if max_time_seconds is not None and (time.perf_counter() - step_begin) >= max_time_seconds:
+                    break
+                if max_nodes is not None and step_expanded >= max_nodes:
+                    break
 
-            _, _, _, current = heapq.heappop(self.frontier)
-            current_key = _search_key(current)
-            if current.g != self.best_cost.get(current_key):
-                continue
-
-            if rules.is_goal(current):
-                self._solved_state = current
-                return _build_result(
-                    state=current,
-                    solved=True,
-                    expanded_nodes=self.expanded_nodes,
-                    generated_nodes=self.generated_nodes,
-                    heuristic_name=self.heuristic_name,
-                )
-
-            self.expanded_nodes += 1
-            step_expanded += 1
-
-            current_progress = _progress_score(current)
-            if current_progress > self.best_progress:
-                self.best_progress = current_progress
-                self.best_state = current
-
-            for move in sorted(rules.enumerate_legal_moves(current), key=_move_priority):
-                next_state = rules.apply_move(current, move)
-                next_state.h = self.heuristic_fn(next_state)
-                next_key = _search_key(next_state)
-
-                if next_state.g >= self.best_cost.get(next_key, float('inf')):
+                _, _, _, current = heapq.heappop(self.frontier)
+                current_key = _search_key(current)
+                if current.g != self.best_cost.get(current_key):
                     continue
 
-                self.best_cost[next_key] = next_state.g
-                self.generated_nodes += 1
-                next_progress = _progress_score(next_state)
-                if next_progress > self.best_progress:
-                    self.best_progress = next_progress
-                    self.best_state = next_state
-                priority, secondary = _frontier_priority(next_state, self.heuristic_weight)
-                heapq.heappush(
-                    self.frontier,
-                    (priority, secondary, next(self.tie_breaker), next_state),
-                )
+                if rules.is_goal(current):
+                    self._solved_state = current
+                    return self._finalize_advance(
+                        state=current,
+                        solved=True,
+                        advance_begin=advance_begin,
+                        stop_tracing=stop_tracing,
+                    )
 
-        if not self.frontier:
-            self._exhausted = True
+                self.expanded_nodes += 1
+                step_expanded += 1
 
-        return _build_result(
-            state=self.best_state,
-            solved=False,
-            expanded_nodes=self.expanded_nodes,
-            generated_nodes=self.generated_nodes,
-            heuristic_name=self.heuristic_name,
-        )
+                current_progress = _progress_score(current)
+                if current_progress > self.best_progress:
+                    self.best_progress = current_progress
+                    self.best_state = current
+
+                for move in sorted(rules.enumerate_legal_moves(current), key=_move_priority):
+                    next_state = rules.apply_move(current, move)
+                    next_state.h = self.heuristic_fn(next_state)
+                    next_key = _search_key(next_state)
+
+                    if next_state.g >= self.best_cost.get(next_key, float('inf')):
+                        continue
+
+                    self.best_cost[next_key] = next_state.g
+                    self.generated_nodes += 1
+                    next_progress = _progress_score(next_state)
+                    if next_progress > self.best_progress:
+                        self.best_progress = next_progress
+                        self.best_state = next_state
+                    priority, secondary = _frontier_priority(next_state, self.heuristic_weight)
+                    heapq.heappush(
+                        self.frontier,
+                        (priority, secondary, next(self.tie_breaker), next_state),
+                    )
+
+            if not self.frontier:
+                self._exhausted = True
+
+            return self._finalize_advance(
+                state=self.best_state,
+                solved=False,
+                advance_begin=advance_begin,
+                stop_tracing=stop_tracing,
+            )
+        except Exception:
+            self._update_measurements(advance_begin=advance_begin, stop_tracing=stop_tracing)
+            raise
 
 
 def solve_a_star(

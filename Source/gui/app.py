@@ -967,11 +967,19 @@ class FreeCellApp:
             lock = self.hint_font.render("AI Solver mode: manual card movement is disabled.", True, (255, 236, 170))
             self.screen.blit(lock, (18, 48))
 
-        if isinstance(self.solver_result, UCSSearchResult) and (
-            rules.is_goal(self.game.get_state())
-            and (self.animator.status.finished or self.solver_result.metrics.solution_steps == 0)
+        metrics = getattr(self.solver_result, "metrics", None)
+        if (
+            metrics is not None
+            and rules.is_goal(self.game.get_state())
+            and (self.animator.status.finished or metrics.solution_steps == 0)
         ):
-            draw_solver_stats(self.screen, self.hint_font, self.body_font, self.solver_result)
+            draw_solver_stats(
+                self.screen,
+                self.hint_font,
+                self.body_font,
+                self.solver_result,
+                self.solver_label,
+            )
 
         draw_win_or_lose_overlay(
             self.screen,
