@@ -519,6 +519,7 @@ class FreeCellApp:
     def _on_game_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
+                self._reset_victory_state()
                 self._cancel_pending_solver()
                 self.animator.clear()
                 self.is_animating = False
@@ -528,7 +529,10 @@ class FreeCellApp:
                 self._go_menu()
             elif event.key == pygame.K_h and not self.ai_solver_mode and not self.animator.status.active:
                 self._request_hint()
+            elif event.key == pygame.K_v: 
+                self._debug_set_instant_win()
             elif event.key == pygame.K_r:
+                self._reset_victory_state()
                 self._cancel_pending_solver()
                 self.game.new_game()
                 self.board.state = self.game.get_state().clone()
@@ -540,6 +544,8 @@ class FreeCellApp:
                 self.solver_result = None
                 self.solver_message = ""
                 self._refresh_game_flags()
+            
+            
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if not self.ai_solver_mode and not self.is_stuck and not self.animator.status.active:
@@ -555,6 +561,7 @@ class FreeCellApp:
                     self._refresh_game_flags()
 
     def _start_manual_game(self, difficulty: str) -> None:
+        self._reset_victory_state()
         self._cancel_pending_solver()
         self.animator.clear()
         self.is_animating = False
@@ -638,6 +645,7 @@ class FreeCellApp:
         self.scene = "game"
 
     def _start_solver_game(self, algorithm: str = "ucs") -> None:
+        self._reset_victory_state()
         self._cancel_pending_solver()
         self.animator.clear()
         self.is_animating = False
@@ -1069,6 +1077,43 @@ class FreeCellApp:
         self.board.state = self.game.get_state().clone()
         self.board.on_reset()
 
+    # --- Thêm vào Source/gui/app.py ---
+
+    def _debug_set_instant_win(self) -> None:
+        """Hàm 'hack' game: Đưa về trạng thái chỉ còn 1 bước là thắng để test hiệu ứng."""
+        from core.state import Card, State
+        
+        # SỬA TẠI ĐÂY: Tạo 8 cột Tableau trống để thỏa mãn yêu cầu của State
+        # Dòng này tạo ra một list chứa 8 list con trống: [[], [], ..., []]
+        cheat_state = State(cascades=[[] for _ in range(8)])
+        
+        # Lấp đầy Foundation (Chuồn, Rô, Cơ mỗi bộ 13 lá)
+        # Lưu ý: Nếu code báo lỗi 'foundations' chưa có, bạn hãy kiểm tra core/state.py
+        cheat_state.foundations['C'] = 13
+        cheat_state.foundations['D'] = 13
+        cheat_state.foundations['H'] = 13
+        
+        # Bộ Bích (Spades) để 12 lá (thiếu con Già - King)
+        cheat_state.foundations['S'] = 12
+        
+        # Đặt con Già Bích (King of Spades) vào ô Free Cell đầu tiên
+        cheat_state.free_cells[0] = Card(rank=13, suit='S')
+        
+        # Cập nhật trạng thái này lên màn hình
+        self.game.set_state(cheat_state)
+        self.board.apply_state(cheat_state)
+        self._refresh_game_flags()
+        self.solver_message = "DEBUG: Move the King of Spades to Foundation to win!"
+
+    # Thêm vào Source/gui/app.py
+
+    def _reset_victory_state(self):
+        """Dọn dẹp sạch sẽ hiệu ứng ăn mừng để không bị lây sang ván sau."""
+        self.victory_timer = 0
+        self.particles = []
+        if hasattr(self, 'jackpot_sound') and self.jackpot_sound:
+            self.jackpot_sound.stop() # Dừng tiếng tiền đổ nếu đang kêu
+
     def _draw(self) -> None:
         if self.scene in ("intro", "outro"):
             pass  # Do not draw game UI when playing video
@@ -1165,6 +1210,7 @@ class FreeCellApp:
         if self.victory_timer > 300:
             self.victory_timer = 0
             self.particles = []
+            self.ai_solver_mode = False
             self._go_menu()
 
     def _draw_victory_celebration(self):
@@ -1200,3 +1246,4 @@ class FreeCellApp:
 
         self.screen.blit(title_surf, (w // 2 - title_surf.get_width() // 2, py + 40))
         self.screen.blit(sub_surf, (w // 2 - sub_surf.get_width() // 2, py + 120))
+
