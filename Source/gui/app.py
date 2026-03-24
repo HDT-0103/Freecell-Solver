@@ -642,7 +642,7 @@ class FreeCellApp:
             )
             return
 
-        if isinstance(result, UCSSearchResult):
+        if hasattr(result, "metrics"):
             self.solver_message = (
                 f"{self.solver_label}: searching deeper "
                 f"({result.metrics.expanded_nodes} nodes, {result.metrics.elapsed_seconds:.1f}s)..."
