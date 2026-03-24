@@ -172,12 +172,14 @@ class BoardRenderer:
         game_state:   State,
         game: Optional[FreeCellGame] = None,
         view_model: Optional[Dict] = None,
+        board_bg: Optional[pygame.Surface] = None,
     ) -> None:
         self.screen_rect = screen_rect
         self.loader      = image_loader
         self.state       = game_state
         self.game        = game
         self.view_model  = view_model or {}
+        self.board_bg    = board_bg
 
         # Lay kich thuoc la bai tu anh mau
         sample            = image_loader.get_image(1, "spades")
@@ -244,16 +246,24 @@ class BoardRenderer:
                 pygame.Rect(x, self.cascades_y, self.card_w, casc_h)
             )
 
+    def set_board_bg(self, bg: Optional[pygame.Surface]) -> None:
+        """Đổi ảnh nền board và rebuild static surface."""
+        self.board_bg = bg
+        self._rebuild_static_surface()
+
     def _rebuild_static_surface(self) -> None:
-        """Ve nen xanh + khung cac o bai len surface tinh."""
-        self._static_surface.fill(self.BG_COLOR)
-        # Van nen nhe
-        for y in range(0, self.screen_rect.height, 6):
-            shade = 100 + (y % 18)
-            pygame.draw.line(
-                self._static_surface, (5, shade, 22),
-                (0, y), (self.screen_rect.width, y),
-            )
+        """Ve nen + khung cac o bai len surface tinh."""
+        if self.board_bg is not None:
+            bg = pygame.transform.scale(self.board_bg, self.screen_rect.size)
+            self._static_surface.blit(bg, (0, 0))
+        else:
+            self._static_surface.fill(self.BG_COLOR)
+            for y in range(0, self.screen_rect.height, 6):
+                shade = 100 + (y % 18)
+                pygame.draw.line(
+                    self._static_surface, (5, shade, 22),
+                    (0, y), (self.screen_rect.width, y),
+                )
         self._draw_slot_group(self.free_cell_rects,  "Free Cells")
         self._draw_slot_group(self.foundation_rects, "Foundation")
         self._draw_slot_group(self.cascade_rects,    "Tableau")
