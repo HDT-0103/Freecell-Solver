@@ -42,6 +42,10 @@ except ImportError:
 
 SolverResult = UCSSearchResult | AStarResult
 
+
+def _asset_path(*parts: str) -> str:
+    return os.path.join(ASSETS_DIR, *parts)
+
 @dataclass(frozen=True)
 class ManualHint:
     move: rules.Move
@@ -185,7 +189,7 @@ class FreeCellApp:
         self.victory_title_font = pygame.font.SysFont("arialblack", 120)
 
         self.hint_knob_surf = None
-        knob_path = os.path.join(os.path.dirname(__file__), "..", "..", "hint_knob_img.png")
+        knob_path = _asset_path("hint_knob_img.png")
         if os.path.exists(knob_path):
             try:
                 self.hint_knob_surf = pygame.image.load(knob_path).convert_alpha()
@@ -296,7 +300,7 @@ class FreeCellApp:
         self.btn_icons = {}
         icon_names = ["new", "replay", "home", "undo", "redo", "hint"]
         for name in icon_names:
-            p = os.path.join(os.path.dirname(__file__), "..", "..", f"icon_{name}.png")
+            p = _asset_path(f"icon_{name}.png")
             if os.path.exists(p):
                 # Nạp ảnh, giữ nguyên tỷ lệ nhưng resize về kích thước chuẩn (e.g., 36x36px)
                 img = pygame.image.load(p).convert_alpha()
@@ -330,10 +334,10 @@ class FreeCellApp:
             except Exception as e:
                 print(f"Error loading jackpot sound: {e}")
 
-        self.bg_music_path = os.path.join(os.path.dirname(__file__), "..", "..", "bg_jazz.mp3")
+        self.bg_music_path = _asset_path("bg_jazz.mp3")
 
         self.deal_sound = None
-        deal_path = os.path.join(os.path.dirname(__file__), "..", "..", "deal.mp3")
+        deal_path = _asset_path("deal.mp3")
         if os.path.exists(deal_path):
             try:
                 self.deal_sound = pygame.mixer.Sound(deal_path)
