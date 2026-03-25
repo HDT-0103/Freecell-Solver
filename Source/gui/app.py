@@ -8,7 +8,6 @@ import math
 from gui.howto import HowToScreen
 from dataclasses import dataclass
 from typing import Dict, List
-from dataclasses import dataclass
 
 import pygame
 
@@ -136,7 +135,7 @@ class FreeCellApp:
             self.clock.tick(60)
             pygame.event.pump()
 
-    def _transition_and_deal(self) -> None:
+    def _transition_and_deal(self, deal_animation: bool = True) -> None:
         """Thực hiện chuyển cảnh, lưu trạng thái gốc và chia bài mượt mà."""
         def setup():
             self._switch_to_game_screen()
@@ -145,8 +144,13 @@ class FreeCellApp:
             if hasattr(self, "history"):
                 self.history.clear()
                 self.redo_stack.clear()
-            # 2. Bắt đầu chia bài SAU KHI màn hình đã setup xong (Fix lỗi cụt animation)
-            self.board.start_deal_animation(self.game.get_state())
+            if deal_animation:
+                # 2. Bắt đầu chia bài SAU KHI màn hình đã setup xong (Fix lỗi cụt animation)
+                self.board.start_deal_animation(self.game.get_state())
+            else:
+                # Tránh chồng 2 hệ animation (deal + solver) gây giật/nhảy lá bài.
+                self._stop_board_deal_animation()
+                self.board.apply_state(self.game.get_state())
             
         self._scene_transition(setup, "game")
 
@@ -744,14 +748,14 @@ class FreeCellApp:
                             return # Click nút rồi thì thoát, không bốc bài nữa
 
             # 2. KIỂM TRA CLICK BỐC BÀI
-            if not self.ai_solver_mode and not self.is_stuck and not self.animator.status.active:
+            if not self.ai_solver_mode and not self.is_stuck and not self.animator.status.active and not self.board.is_dealing:
                 self.board.on_mouse_down(event.pos)
 
-        if event.type == pygame.MOUSEMOTION and (not self.ai_solver_mode) and (not self.animator.status.active):
+        if event.type == pygame.MOUSEMOTION and (not self.ai_solver_mode) and (not self.animator.status.active) and (not self.board.is_dealing):
             self.board.on_mouse_motion(event.pos)
 
         if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-            if not self.ai_solver_mode and not self.is_stuck and not self.animator.status.active:
+            if not self.ai_solver_mode and not self.is_stuck and not self.animator.status.active and not self.board.is_dealing:
                 prev_state = self.game.get_state().clone()
                 moved = self.board.on_mouse_up(event.pos)
                 if moved:
@@ -790,8 +794,6 @@ class FreeCellApp:
 
             self.game.new_game(seed=None)
             self._update_game_from_state()
-            # self.board.on_reset()
-            self.board.start_deal_animation(self.game.get_state())
             self._refresh_game_flags()
             self.solver_message = "No Easy sample deals found. Started a random shuffle."
             self.board.set_board_bg(self._board_bgs.get("manual"))
@@ -832,12 +834,10 @@ class FreeCellApp:
             self.history.clear()
             self.redo_stack.clear()
             self._update_game_from_state()
-            self.board.start_deal_animation(self.game.get_state())
             self._refresh_game_flags()
             self.solver_message = "No Easy sample deals found. Started a random shuffle."
             self.board.set_board_bg(self._board_bgs.get("manual"))
             self._transition_and_deal()
-            self.board.start_deal_animation(self.game.get_state())
             return
 
         selected_index = max(0, min(selected_index, len(easy_games) - 1))
@@ -847,17 +847,13 @@ class FreeCellApp:
 
         if loaded:
             self.solver_message = f"Loaded Easy sample: {self.last_loaded_sample}"
-            self.board.start_deal_animation(self.game.get_state())
         else:
             self.game.new_game(seed=None)
             self._update_game_from_state()
-            self.board.start_deal_animation(self.game.get_state())
             self._refresh_game_flags()
             self.solver_message = "Failed to load selected Easy deal. Started a random shuffle."
 
         self.board.set_board_bg(self._board_bgs.get("manual"))
-        self._switch_to_game_screen()
-        self.scene = "game"
         self._transition_and_deal()
 
     def _start_solver_game(self, algorithm: str = "ucs") -> None:
@@ -892,10 +888,8 @@ class FreeCellApp:
         else:
             self.solver_message = f"AI Solver ({algorithm.upper()}): loaded {self.last_loaded_sample}, searching..."
 
-        self._stop_board_deal_animation()
-        
         self.board.set_board_bg(self._board_bgs.get(algorithm))
-        self._transition_and_deal()
+        self._transition_and_deal(deal_animation=False)
         self._launch_solver_async()
 
     def _launch_solver_async(self) -> None:
@@ -1225,7 +1219,6 @@ class FreeCellApp:
         ok = load_game_from_json(file_path, self.game)
         if ok:
             self.board.state = self.game.get_state().clone()
-            self.board.start_deal_animation(self.game.get_state())
             self.last_loaded_sample = os.path.relpath(file_path, SOLUTION_DIR)
             self._refresh_game_flags()
         return ok
@@ -1242,7 +1235,6 @@ class FreeCellApp:
             self._sample_game_indices[difficulty] = (index + 1) % len(files)
             self.last_loaded_sample = os.path.join(difficulty, os.path.basename(file_path))
             self._update_game_from_state()
-            self.board.start_deal_animation(self.game.get_state())
             self._refresh_game_flags()
         return ok
 
@@ -1393,6 +1385,7 @@ class FreeCellApp:
                 f"Hint (A*): move {self._format_card(card)} from {hint.source_label} "
                 f"to {hint.target_label}."
             )
+
 
     def _build_immediate_step_path(self) -> List[State] | None:
         cur = self.game.get_state()

@@ -369,12 +369,10 @@ class BoardRenderer:
 
         for suit_idx, suit in enumerate(self.FOUNDATION_ORDER):
             top_rank = self.state.foundations[suit]
-            if top_rank > 0:
-                top_card = Card(rank=top_rank, suit=suit)
-                self._ensure_widget(top_card).move_to(
-                    self.foundation_rects[suit_idx].x,
-                    self.foundation_rects[suit_idx].y,
-                )
+            for rank in range(1, top_rank + 1):
+                card = Card(rank=rank, suit=suit)
+                x, y = self._foundation_stack_position(suit_idx, rank)
+                self._ensure_widget(card).move_to(x, y)
 
         for i, cascade in enumerate(self.state.cascades):
             bx = self.cascade_rects[i].x
@@ -383,6 +381,13 @@ class BoardRenderer:
                 self._widgets[card_data].move_to(
                     bx, by + depth * self.card_overlap_y
                 )
+
+    def _foundation_stack_position(self, suit_idx: int, rank: int) -> Tuple[int, int]:
+        """Return per-rank position for a visible stacked foundation effect."""
+        rect = self.foundation_rects[suit_idx]
+        # Keep a subtle vertical stack so previous cards stay visible.
+        offset = min(max(rank - 1, 0), 12)
+        return rect.x, rect.y - offset
 
     def apply_state(self, state: State) -> None:
         """Apply a full State snapshot to renderer and sync card positions."""
@@ -420,9 +425,8 @@ class BoardRenderer:
                 result[card_data] = (rect.x, rect.y)
 
         for suit_idx, suit in enumerate(self.FOUNDATION_ORDER):
-            rect = self.foundation_rects[suit_idx]
             for rank in range(1, state.foundations[suit] + 1):
-                result[Card(rank=rank, suit=suit)] = (rect.x, rect.y)
+                result[Card(rank=rank, suit=suit)] = self._foundation_stack_position(suit_idx, rank)
 
         for i, cascade in enumerate(state.cascades):
             bx, by = self.cascade_rects[i].x, self.cascade_rects[i].y
@@ -625,8 +629,9 @@ class BoardRenderer:
         # LỚP 1: BÀI TĨNH
         for card in self.state.free_cells: _render_card_item(card)
         for suit in self.FOUNDATION_ORDER:
-            rank = self.state.foundations[suit]
-            if rank > 0: _render_card_item(Card(rank=rank, suit=suit))
+            top_rank = self.state.foundations[suit]
+            for rank in range(1, top_rank + 1):
+                _render_card_item(Card(rank=rank, suit=suit))
         for cascade in self.state.cascades:
             for card in cascade: _render_card_item(card)
 
