@@ -6,6 +6,7 @@ import sys
 import threading
 import math
 from gui.howto import HowToScreen
+from dataclasses import dataclass
 from typing import Dict, List
 
 import pygame
@@ -19,14 +20,15 @@ try:
 except ImportError:
     VideoFileClip = None
 
-from config import CARD_IMAGE_DIR, SOLUTION_DIR
+from config import ASSETS_DIR, CARD_IMAGE_DIR, SOLUTION_DIR
 from core import FreeCellGame, rules
 from core.loader import load_game_from_json
+from core.state import State
 from gui.animation import SolverAnimator
 from gui.hud import draw_solver_stats, draw_win_or_lose_overlay
 from gui.interface import BoardRenderer, CardImageLoader
 from gui.menu import MenuScreen
-from solvers.ucs import Move as HintMove, UCSSearchResult, get_hint, solve_ucs
+from solvers.ucs import UCSSearchResult, solve_ucs
 from solvers.a_star import AStarResult, AStarSearchSession, solve_a_star
 try:
     from solvers.bfs import solve_bfs
@@ -38,6 +40,17 @@ except ImportError:
     solve_dfs = None
 
 SolverResult = UCSSearchResult | AStarResult
+
+
+@dataclass(frozen=True)
+class ManualHint:
+    move: rules.Move
+    source_label: str
+    target_label: str
+
+
+def _asset_path(filename: str) -> str:
+    return os.path.join(ASSETS_DIR, filename)
 
 
 class FreeCellApp:
@@ -162,7 +175,7 @@ class FreeCellApp:
         self.victory_title_font = pygame.font.SysFont("arialblack", 120)
 
         self.click_sound = None
-        click_path = os.path.join(os.path.dirname(__file__), "..", "..", "btn_click.mp3")
+        click_path = _asset_path("btn_click.mp3")
         if os.path.exists(click_path):
             try:
                 self.click_sound = pygame.mixer.Sound(click_path)
@@ -171,7 +184,7 @@ class FreeCellApp:
                 print(f"Lỗi nạp âm thanh click: {e}")
 
         # 1. Background Image setup cho Menu
-        bg_path = os.path.join(os.path.dirname(__file__), "..", "..", "background.jpg")
+        bg_path = _asset_path("background.jpg")
         bg_image = None
         if os.path.exists(bg_path):
             try:
@@ -181,13 +194,13 @@ class FreeCellApp:
         self.bg_image = bg_image
 
         self.page0_bg = None
-        p0_path = os.path.join(os.path.dirname(__file__), "..", "..", "howto_p0_bg.png")
+        p0_path = _asset_path("howto_p0_bg.jpg")
         if os.path.exists(p0_path):
             self.page0_bg = pygame.image.load(p0_path).convert()
         
         # 2. Background cho HowToPlay - dùng để xác định kích thước chuẩn của cửa sổ
         howto_bg = None
-        howto_bg_path = os.path.join(os.path.dirname(__file__), "..", "..", "howto_bg.png")
+        howto_bg_path = _asset_path("howto_bg.png")
         if os.path.exists(howto_bg_path):
             try:
                 howto_bg = pygame.image.load(howto_bg_path).convert()
@@ -207,7 +220,7 @@ class FreeCellApp:
 
         # 4. Tải ảnh nền cho video - ÉP VÀO KÍCH THƯỚC CỬA SỔ
         self.video_bg_image = None
-        v_bg_path = os.path.join(os.path.dirname(__file__), "..", "..", "video_bg.jpg")
+        v_bg_path = _asset_path("video_bg.jpg")
         if os.path.exists(v_bg_path):
             try:
                 loaded_v_bg = pygame.image.load(v_bg_path).convert()
@@ -221,8 +234,8 @@ class FreeCellApp:
         self.video_clip = None
         self.outro_clip = None
 
-        video_path = os.path.join(os.path.dirname(__file__), "..", "..", "intro.mp4")
-        outro_path = os.path.join(os.path.dirname(__file__), "..", "..", "outro.mp4")
+        video_path = _asset_path("intro.mp4")
+        outro_path = _asset_path("outro.mp4")
 
         if self.scene == "intro":
             if os.path.exists(video_path):
@@ -242,7 +255,7 @@ class FreeCellApp:
 
         # 6. Background cho selector
         selector_bg = None
-        selector_bg_path = os.path.join(os.path.dirname(__file__), "..", "..", "selector_bg.jpg")
+        selector_bg_path = _asset_path("selector_bg.jpg")
         if os.path.exists(selector_bg_path):
             try:
                 selector_bg = pygame.image.load(selector_bg_path).convert()
@@ -251,7 +264,7 @@ class FreeCellApp:
 
         # Load ảnh nền cho từng mode game
         def _load_bg(filename):
-            path = os.path.join(os.path.dirname(__file__), "..", "..", filename)
+            path = _asset_path(filename)
             try:
                 return pygame.image.load(path).convert() if os.path.exists(path) else None
             except Exception as e:
@@ -264,7 +277,7 @@ class FreeCellApp:
 
         # Nạp hiệu ứng âm thanh Jackpot
         self.jackpot_sound = None
-        sound_path = os.path.join(os.path.dirname(__file__), "..", "..", "jackpot.wav")
+        sound_path = _asset_path("jackpot.wav")
         if os.path.exists(sound_path):
             try:
                 self.jackpot_sound = pygame.mixer.Sound(sound_path)
@@ -273,7 +286,7 @@ class FreeCellApp:
             except Exception as e:
                 print(f"Error loading jackpot sound: {e}")
 
-        self.bg_music_path = os.path.join(os.path.dirname(__file__), "..", "..", "bg_jazz.mp3")
+        self.bg_music_path = _asset_path("bg_jazz.mp3")
 
         if self.scene != "intro":
             self._play_bg_music()
@@ -281,7 +294,7 @@ class FreeCellApp:
         self.hover_sound = None
         self._last_hovered_item = None
 
-        hover_path = os.path.join(os.path.dirname(__file__), "..", "..", "chip_hover.mp3")
+        hover_path = _asset_path("chip_hover.mp3")
         if os.path.exists(hover_path):
             try:
                 self.hover_sound = pygame.mixer.Sound(hover_path)
@@ -329,6 +342,9 @@ class FreeCellApp:
         self.is_animating = False
         self.ai_solver_mode = False
         self._ai_total_applied_moves = 0
+        self._ai_total_elapsed_seconds = 0.0
+        self._ai_total_expanded_nodes = 0
+        self._ai_peak_memory_bytes = 0
 
         self._sample_game_files = self._discover_sample_games()
         self._sample_games_by_difficulty = self._discover_sample_games_by_difficulty() 
@@ -508,6 +524,7 @@ class FreeCellApp:
 
             self._handle_events()
             self._poll_solver_result()
+            self._poll_hint_result()
 
             if self.scene == "game":
                 was_active = self.animator.status.active
@@ -621,21 +638,6 @@ class FreeCellApp:
                 self.is_stuck = True
                 self.solver_message = "DEBUG: You pressed 'L' to trigger Lose screen."
                 self._play_lose_music()
-            elif event.key == pygame.K_r:
-                self._play_click_sound()
-                self._reset_victory_state()
-                self._cancel_pending_solver()
-                self.game.new_game()
-                self.board.state = self.game.get_state().clone()
-                # self.board.on_reset()
-                self.board.start_deal_animation(self.game.get_state())
-                self.animator.clear()
-                self.is_animating = False
-                self.ai_solver_mode = False
-                self._ai_total_applied_moves = 0
-                self.solver_result = None
-                self.solver_message = ""
-                self._refresh_game_flags()
             
             
 
@@ -748,6 +750,9 @@ class FreeCellApp:
         self.is_animating = False
         self.ai_solver_mode = True
         self._ai_total_applied_moves = 0
+        self._ai_total_elapsed_seconds = 0.0
+        self._ai_total_expanded_nodes = 0
+        self._ai_peak_memory_bytes = 0
         self.solver_result = None
         self._solver_async_result = None
         self._solver_async_error = None
@@ -760,19 +765,16 @@ class FreeCellApp:
         self.solver_algorithm = algorithm
         self.solver_label = "A*" if algorithm == "a_star" else algorithm.upper()
 
-        loaded = self._load_next_sample_game("easy")
-        if not loaded:
-            loaded = self._load_next_sample_game()
+        loaded = self._load_solver_game_00()
         if not loaded:
             self.game.new_game()
-            self.board.state = self.game.get_state().clone()
-            # self.board.on_reset()
-            self.board.start_deal_animation(self.game.get_state())
+            self._update_game_from_state()
             self._refresh_game_flags()
-            self.solver_message = f"AI Solver ({algorithm.upper()}) sample not found. Started a random shuffle."
+            self.solver_message = f"AI Solver ({algorithm.upper()}): game_00.json not found. Started a random shuffle."
         else:
             self.solver_message = f"AI Solver ({algorithm.upper()}): loaded {self.last_loaded_sample}, searching..."
 
+        self._stop_board_deal_animation()
         
         self.board.set_board_bg(self._board_bgs.get(algorithm))
         self._scene_transition(self._switch_to_game_screen, "game")
@@ -830,11 +832,139 @@ class FreeCellApp:
         self._solver_async_error = None
         self._a_star_session = None
 
+    def _accumulate_solver_metrics(self, result) -> None:
+        metrics = getattr(result, "metrics", None)
+        if metrics is None:
+            return
+
+        if self.solver_algorithm == "a_star":
+            # A* session metrics are already cumulative across advance() calls.
+            self._ai_total_elapsed_seconds = float(getattr(metrics, "elapsed_seconds", 0.0))
+            self._ai_total_expanded_nodes = int(getattr(metrics, "expanded_nodes", 0))
+            self._ai_peak_memory_bytes = int(getattr(metrics, "peak_memory_bytes", 0))
+            return
+
+        # UCS/BFS/DFS run stage-by-stage from updated board states.
+        self._ai_total_elapsed_seconds += float(getattr(metrics, "elapsed_seconds", 0.0))
+        self._ai_total_expanded_nodes += int(getattr(metrics, "expanded_nodes", 0))
+        self._ai_peak_memory_bytes = max(
+            self._ai_peak_memory_bytes,
+            int(getattr(metrics, "peak_memory_bytes", 0)),
+        )
+
     def _cancel_pending_hint(self) -> None:
         self._hint_job_id += 1
         self._hint_pending = False
         self._hint_async_result = None
         self._hint_async_error = None
+
+    def _request_hint(self) -> None:
+        if self._hint_pending:
+            return
+
+        self._clear_hint()
+        snapshot = self.game.get_state().clone()
+        self._hint_job_id += 1
+        job_id = self._hint_job_id
+        self._hint_pending = True
+        self._hint_async_result = None
+        self._hint_async_error = None
+        self.solver_message = "Hint (A*): searching a fast suggestion..."
+
+        def worker() -> None:
+            try:
+                session = AStarSearchSession(
+                    snapshot,
+                    heuristic="blocking",
+                    heuristic_weight=2.0,
+                )
+                result = session.advance(max_nodes=35_000, max_time_seconds=0.8)
+                hint: ManualHint | None = None
+                if result.moves:
+                    first_move = result.moves[0]
+                    if self._card_from_move(snapshot, first_move) is not None:
+                        hint = ManualHint(
+                            move=first_move,
+                            source_label=self._source_label_from_move(first_move),
+                            target_label=self._target_label_from_move(first_move),
+                        )
+
+                if hint is None:
+                    fallback_move = self._fallback_hint_move(snapshot)
+                    if fallback_move is not None:
+                        hint = ManualHint(
+                            move=fallback_move,
+                            source_label=self._source_label_from_move(fallback_move),
+                            target_label=self._target_label_from_move(fallback_move),
+                        )
+
+                if self._hint_job_id == job_id:
+                    self._hint_async_result = hint if hint is not None else False
+            except Exception as exc:
+                if self._hint_job_id == job_id:
+                    self._hint_async_error = str(exc)
+
+        self._hint_thread = threading.Thread(target=worker, daemon=True)
+        self._hint_thread.start()
+
+    def _load_solver_game_00(self) -> bool:
+        primary = os.path.join(SOLUTION_DIR, "easy", "game_00.json")
+        candidates = [primary]
+
+        for file_path in self._sample_game_files:
+            if os.path.basename(file_path).lower() == "game_00.json" and file_path not in candidates:
+                candidates.append(file_path)
+
+        for file_path in candidates:
+            if not os.path.exists(file_path):
+                continue
+            ok = load_game_from_json(file_path, self.game)
+            if not ok:
+                continue
+            self._update_game_from_state()
+            self.last_loaded_sample = os.path.relpath(file_path, SOLUTION_DIR)
+            self._refresh_game_flags()
+            return True
+
+        return False
+
+    def _poll_hint_result(self) -> None:
+        if not self._hint_pending:
+            return
+
+        if self._hint_async_error:
+            self._hint_pending = False
+            self.solver_message = f"Hint error: {self._hint_async_error}"
+            self._hint_async_error = None
+            return
+
+        if self._hint_async_result is None:
+            return
+
+        result = self._hint_async_result
+        self._hint_async_result = None
+        self._hint_pending = False
+        if result is False or result is None:
+            current_state = self.game.get_state()
+            fallback_move = self._fallback_hint_move(current_state)
+            if fallback_move is not None:
+                fallback_card = self._card_from_move(current_state, fallback_move)
+                if fallback_card is not None:
+                    self.current_hint = ManualHint(
+                        move=fallback_move,
+                        source_label=self._source_label_from_move(fallback_move),
+                        target_label=self._target_label_from_move(fallback_move),
+                    )
+                    self.board.set_highlighted_card(fallback_card)
+                else:
+                    self._clear_hint()
+            else:
+                self._clear_hint()
+
+            self.solver_message = "Hint: Try moving any highlighted card or clearing a column."
+            return
+
+        self._show_hint(result)
 
     def _clear_hint(self) -> None:
         self.current_hint = None
@@ -857,33 +987,30 @@ class FreeCellApp:
         self._solver_async_result = None
         self._solver_pending = False
         self.solver_result = result
+        self._accumulate_solver_metrics(result)
 
         if result.solved:
             self._solver_stage_idx = 0
             name = self.last_loaded_sample or "random shuffle"
-            if isinstance(result, UCSSearchResult):
-                total_steps = self._ai_total_applied_moves + result.metrics.solution_steps
-                result.metrics.solution_steps = total_steps
+            total_steps = self._ai_total_applied_moves + len(result.moves)
+            metrics = getattr(result, "metrics", None)
+            if metrics is not None:
+                metrics.solution_steps = total_steps
+                metrics.elapsed_seconds = self._ai_total_elapsed_seconds
+                metrics.expanded_nodes = self._ai_total_expanded_nodes
+                metrics.peak_memory_bytes = self._ai_peak_memory_bytes
                 self.solver_message = (
                     f"{self.solver_label}: {name} - "
                     f"{total_steps} steps, "
-                    f"{result.metrics.elapsed_seconds:.2f}s"
-                )
-            elif hasattr(result, "metrics"):
-                total_steps = self._ai_total_applied_moves + result.metrics.solution_steps
-                result.metrics.solution_steps = total_steps
-                self.solver_message = (
-                    f"{self.solver_label}: {name} - "
-                    f"{total_steps} steps, "
-                    f"{result.metrics.expanded_nodes} expanded"
+                    f"{metrics.expanded_nodes} expanded, "
+                    f"{metrics.elapsed_seconds:.2f}s"
                 )
             else:
-                total_steps = self._ai_total_applied_moves + len(result.moves)
                 self.solver_message = (
                     f"{self.solver_label}: {name} - "
-                    f"{total_steps} steps, "
-                    f"{result.expanded_nodes} expanded"
+                    f"{total_steps} steps"
                 )
+            self._stop_board_deal_animation()
             self.animator.animate_solution(result.state_path)
             self.is_animating = True
             return
@@ -891,6 +1018,7 @@ class FreeCellApp:
         self._solver_stage_idx = min(self._solver_stage_idx + 1, len(self._solver_stages) - 1)
         if self._solver_renders_partial_progress() and len(result.state_path) > 1:
             self._solver_stage_idx = 0
+            self._stop_board_deal_animation()
             self.animator.animate_solution(result.state_path)
             self.is_animating = True
             self.solver_message = (
@@ -1016,7 +1144,7 @@ class FreeCellApp:
         if isinstance(index, str):
             suit_names = {"C": "Clubs", "D": "Diamonds", "H": "Hearts", "S": "Spades"}
             return f"Foundation {suit_names.get(index, index)}"
-        suit_names = ["Clubs", "Diamonds", "Hearts", "Spades"]
+        suit_names = ["Spades", "Hearts", "Clubs", "Diamonds"]
         return f"Foundation {suit_names[index]}"
 
     def _format_card(self, card) -> str:
@@ -1025,18 +1153,106 @@ class FreeCellApp:
         suit_label = {"C": "Clubs", "D": "Diamonds", "H": "Hearts", "S": "Spades"}.get(card.suit, str(card.suit).title())
         return f"{rank_label} of {suit_label}"
 
-    def _show_hint(self, hint: HintMove | None) -> None:
+    def _card_from_move(self, state, move: rules.Move):
+        if move.src_type == rules.LOCATION_FREE_CELL:
+            if 0 <= move.src_index < len(state.free_cells):
+                return state.free_cells[move.src_index]
+            return None
+
+        if move.src_type == rules.LOCATION_CASCADE:
+            if not (0 <= move.src_index < len(state.cascades)):
+                return None
+            cascade = state.cascades[move.src_index]
+            idx = len(cascade) - move.count
+            return cascade[idx] if 0 <= idx < len(cascade) else None
+
+        return None
+
+    def _fallback_hint_move(self, state: State) -> rules.Move | None:
+        legal_moves = rules.enumerate_legal_moves(state)
+        if not legal_moves:
+            return None
+
+        def _priority(move: rules.Move) -> tuple[int, int, int, int]:
+            if move.dst_type == rules.LOCATION_FOUNDATION:
+                return (0, 0, 0, -move.count)
+            if move.src_type == rules.LOCATION_FREE_CELL and move.dst_type == rules.LOCATION_CASCADE:
+                return (1, 0, 0, -move.count)
+            if move.src_type == rules.LOCATION_CASCADE and move.dst_type == rules.LOCATION_CASCADE:
+                return (2, 0, 0, -move.count)
+            if move.src_type == rules.LOCATION_CASCADE and move.dst_type == rules.LOCATION_FREE_CELL:
+                return (3, 0, 0, move.count)
+            return (4, 0, 0, move.count)
+
+        return min(legal_moves, key=_priority)
+
+    def _source_label_from_move(self, move: rules.Move) -> str:
+        if move.src_type == rules.LOCATION_CASCADE:
+            return f"Tableau {move.src_index + 1}"
+        if move.src_type == rules.LOCATION_FREE_CELL:
+            return f"Free Cell {move.src_index + 1}"
+        return "Unknown"
+
+    def _target_label_from_move(self, move: rules.Move) -> str:
+        if move.dst_type == rules.LOCATION_CASCADE:
+            return f"Tableau {move.dst_index + 1}"
+        if move.dst_type == rules.LOCATION_FREE_CELL:
+            return f"Free Cell {move.dst_index + 1}"
+        if move.dst_type == rules.LOCATION_FOUNDATION:
+            suit_names = {"C": "Clubs", "D": "Diamonds", "H": "Hearts", "S": "Spades"}
+            return f"Foundation {suit_names.get(move.dst_index, move.dst_index)}"
+        return "Unknown"
+
+    def _show_hint(self, hint: ManualHint | None) -> None:
         if hint is None:
             self._clear_hint()
             self.solver_message = "Hint: no strong move found from the current position."
             return
 
+        current_state = self.game.get_state()
+        if not rules.is_legal_move(current_state, hint.move):
+            fallback_move = self._fallback_hint_move(current_state)
+            if fallback_move is None:
+                self._clear_hint()
+                self.solver_message = "Hint: Try moving any highlighted card or clearing a column."
+                return
+            hint = ManualHint(
+                move=fallback_move,
+                source_label=self._source_label_from_move(fallback_move),
+                target_label=self._target_label_from_move(fallback_move),
+            )
+
+        card = self._card_from_move(current_state, hint.move)
+        if card is None:
+            fallback_move = self._fallback_hint_move(current_state)
+            if fallback_move is None:
+                self._clear_hint()
+                self.solver_message = "Hint: Try moving any highlighted card or clearing a column."
+                return
+            hint = ManualHint(
+                move=fallback_move,
+                source_label=self._source_label_from_move(fallback_move),
+                target_label=self._target_label_from_move(fallback_move),
+            )
+            card = self._card_from_move(current_state, hint.move)
+            if card is None:
+                self._clear_hint()
+                self.solver_message = "Hint: Try moving any highlighted card or clearing a column."
+                return
+
         self.current_hint = hint
-        self.board.set_highlighted_card(hint.card)
-        self.solver_message = (
-            f"Hint: move {self._format_card(hint.card)} from {self._format_location(hint.source)} "
-            f"to {self._format_location(hint.target)}."
-        )
+        self.board.set_highlighted_card(card)
+
+        if hint.move.count > 1:
+            self.solver_message = (
+                f"Hint (A*): move sequence ({hint.move.count} cards), starting with "
+                f"{self._format_card(card)} from {hint.source_label} to {hint.target_label}."
+            )
+        else:
+            self.solver_message = (
+                f"Hint (A*): move {self._format_card(card)} from {hint.source_label} "
+                f"to {hint.target_label}."
+            )
 
     def _build_immediate_step_path(self) -> List[State] | None:
         cur = self.game.get_state()
@@ -1104,7 +1320,7 @@ class FreeCellApp:
     def _play_lose_music(self) -> None:
         """Làm mờ nhạc Jazz và phát nhạc nền buồn khi thua cuộc."""
         if not getattr(self, "_is_lose_music_playing", False):
-            lose_path = os.path.join(os.path.dirname(__file__), "..", "..", "lose_bgm.mp3")
+            lose_path = _asset_path("lose_bgm.mp3")
             if os.path.exists(lose_path):
                 try:
                     pygame.mixer.music.fadeout(500) # Từ từ tắt nhạc Jazz
@@ -1213,6 +1429,10 @@ class FreeCellApp:
     def _update_game_from_state(self) -> None:
         self.board.state = self.game.get_state().clone()
         self.board.on_reset()
+
+    def _stop_board_deal_animation(self) -> None:
+        self.board.is_dealing = False
+        self.board.animation_queue = []
 
 
     def _debug_set_instant_win(self) -> None:
@@ -1338,7 +1558,7 @@ class FreeCellApp:
 
     def _draw_game_hud(self) -> None:
         h = self.screen.get_height()
-        hint = self.hint_font.render("ESC: Menu   |   R: New Shuffle", True, (255, 250, 205))
+        hint = self.hint_font.render("ESC: Menu   |   H: Hint", True, (255, 250, 205))
         self.screen.blit(hint, (18, h - hint.get_height() - 14))
 
         if self.is_animating:

@@ -33,6 +33,7 @@ class SolverAnimator:
 		self._moving_card: Optional[Card] = None
 		self._start_pos: Optional[Tuple[int, int]] = None
 		self._end_pos: Optional[Tuple[int, int]] = None
+		self._pending_state: Optional[State] = None
 
 		self.status = AnimationStatus()
 
@@ -50,6 +51,7 @@ class SolverAnimator:
 		self._moving_card = None
 		self._start_pos = None
 		self._end_pos = None
+		self._pending_state = None
 
 		total_moves = max(0, len(self._solution_path) - 1)
 		self.status = AnimationStatus(
@@ -69,6 +71,7 @@ class SolverAnimator:
 		self._moving_card = None
 		self._start_pos = None
 		self._end_pos = None
+		self._pending_state = None
 		self.status = AnimationStatus(active=False, finished=False)
 
 	def _find_moved_card(
@@ -77,6 +80,25 @@ class SolverAnimator:
 		prev_state: State,
 		next_state: State,
 	) -> Tuple[Optional[Card], Optional[Tuple[int, int]], Optional[Tuple[int, int]]]:
+		move = next_state.move
+		if move is not None:
+			moved_card: Optional[Card] = None
+			if move.src_type == 'cascade':
+				src = prev_state.cascades[move.src_index]
+				if len(src) >= move.count:
+					# For multi-card moves, animate the top card of the moved block.
+					moved_card = src[-1]
+			elif move.src_type == 'free_cell':
+				moved_card = prev_state.free_cells[move.src_index]
+
+			if moved_card is not None:
+				prev_positions = board.get_card_positions(prev_state)
+				next_positions = board.get_card_positions(next_state)
+				start_pos = prev_positions.get(moved_card)
+				end_pos = next_positions.get(moved_card)
+				if start_pos is not None and end_pos is not None and start_pos != end_pos:
+					return moved_card, start_pos, end_pos
+
 		prev_positions = board.get_card_positions(prev_state)
 		next_positions = board.get_card_positions(next_state)
 
@@ -103,9 +125,9 @@ class SolverAnimator:
 		next_state = self._solution_path[self._index + 1]
 
 		card, start_pos, end_pos = self._find_moved_card(board, prev_state, next_state)
-		board.apply_state(next_state)
 
 		if card is None or start_pos is None or end_pos is None:
+			board.apply_state(next_state)
 			self._index += 1
 			self.status.applied_moves = self._index
 			self._last_step_tick = pygame.time.get_ticks()
@@ -121,6 +143,7 @@ class SolverAnimator:
 		self._moving_card = card
 		self._start_pos = start_pos
 		self._end_pos = end_pos
+		self._pending_state = next_state
 		self._transition_frame = 0
 		self._in_transition = True
 		widget.move_to(start_pos[0], start_pos[1])
@@ -147,7 +170,9 @@ class SolverAnimator:
 		self._clock.tick(60)
 
 		if self._transition_frame >= self.transition_frames:
-			widget.move_to(self._end_pos[0], self._end_pos[1])
+			if self._pending_state is not None:
+				board.apply_state(self._pending_state)
+			self._pending_state = None
 			self._in_transition = False
 			self._moving_card = None
 			self._start_pos = None

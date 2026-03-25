@@ -5,6 +5,7 @@ import os
 
 import pygame
 
+from config import ASSETS_DIR
 from gui.interface import Button
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
@@ -45,8 +46,7 @@ class HowToScreen:
         self.page0_bg = None 
         
         # 2. Định nghĩa đường dẫn và nạp ảnh
-        # Giả sử ảnh nằm cùng cấp với background.jpg (thư mục cha của thư mục Source)
-        p0_path = os.path.join(os.path.dirname(__file__), "..", "..", "howto_p0_bg.jpg")
+        p0_path = os.path.join(ASSETS_DIR, "howto_p0_bg.jpg")
         
         if os.path.exists(p0_path):
             try:

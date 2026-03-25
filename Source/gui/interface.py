@@ -165,6 +165,7 @@ class BoardRenderer:
     SLOT_COLOR  = (230, 210, 90)
     SLOT_BORDER = (250, 240, 130)
     LABEL_COLOR = (255, 244, 170)
+    FOUNDATION_ORDER = ("S", "H", "C", "D")
 
     def __init__(
         self,
@@ -281,6 +282,7 @@ class BoardRenderer:
         self._draw_slot_group(self.free_cell_rects,  "Free Cells", color=EMERALD)
         self._draw_slot_group(self.foundation_rects, "Foundation", color=GOLD)
         self._draw_slot_group(self.cascade_rects,    "Tableau")
+        self._draw_foundation_placeholders()
 
         if self.free_cell_rects and self.foundation_rects:
             # 1. Tính toán vị trí chính giữa khoảng hở (Center Gap)
@@ -321,6 +323,24 @@ class BoardRenderer:
         title_y = rects[0].top - label.get_height() - 8
         self._static_surface.blit(label, (title_x, title_y))
 
+    def _draw_foundation_placeholders(self) -> None:
+        symbol_by_suit = {"S": "\u2660", "H": "\u2665", "C": "\u2663", "D": "\u2666"}
+        color_by_suit = {
+            "S": (230, 224, 178),
+            "H": (215, 78, 65),
+            "C": (230, 224, 178),
+            "D": (215, 78, 65),
+        }
+        symbol_font = pygame.font.SysFont("segoeuisymbol", max(22, self.card_h // 3), bold=True)
+
+        for idx, rect in enumerate(self.foundation_rects):
+            suit = self.FOUNDATION_ORDER[idx]
+            symbol = symbol_by_suit[suit]
+            color = color_by_suit[suit]
+            text = symbol_font.render(symbol, True, color)
+            text_rect = text.get_rect(center=rect.center)
+            self._static_surface.blit(text, text_rect)
+
     # ------------------------------------------------------------------
     # Quan ly vong doi CardWidget
     # ------------------------------------------------------------------
@@ -347,7 +367,7 @@ class BoardRenderer:
                     self.free_cell_rects[i].y,
                 )
 
-        for suit_idx, suit in enumerate(("C", "D", "H", "S")):
+        for suit_idx, suit in enumerate(self.FOUNDATION_ORDER):
             top_rank = self.state.foundations[suit]
             if top_rank > 0:
                 top_card = Card(rank=top_rank, suit=suit)
@@ -371,7 +391,7 @@ class BoardRenderer:
         for card_data in self.state.free_cells:
             if card_data:
                 self._ensure_widget(card_data)
-        for suit in ("C", "D", "H", "S"):
+        for suit in self.FOUNDATION_ORDER:
             for rank in range(1, self.state.foundations[suit] + 1):
                 self._ensure_widget(Card(rank=rank, suit=suit))
         for cascade in self.state.cascades:
@@ -399,7 +419,7 @@ class BoardRenderer:
                 rect = self.free_cell_rects[i]
                 result[card_data] = (rect.x, rect.y)
 
-        for suit_idx, suit in enumerate(("C", "D", "H", "S")):
+        for suit_idx, suit in enumerate(self.FOUNDATION_ORDER):
             rect = self.foundation_rects[suit_idx]
             for rank in range(1, state.foundations[suit] + 1):
                 result[Card(rank=rank, suit=suit)] = (rect.x, rect.y)
@@ -500,7 +520,7 @@ class BoardRenderer:
             src_type_core = "free_cell" if src_type == "freecell" else src_type
             dst_type_core = "free_cell" if dst_type == "freecell" else dst_type
             if dst_type == "foundation":
-                dst_idx_core = ["C", "D", "H", "S"][dst_idx]
+                dst_idx_core = self.FOUNDATION_ORDER[dst_idx]
             else:
                 dst_idx_core = dst_idx
 
@@ -556,10 +576,28 @@ class BoardRenderer:
                     continue
                 w, tx, ty = item["widget"], item["target"][0], item["target"][1]
                 curr_x, curr_y = w.rect.topleft
-                w.move_to(int(curr_x + (tx - curr_x) * 0.1), int(curr_y + (ty - curr_y) * 0.1))
-                if abs(tx - curr_x) > 1 or abs(ty - curr_y) > 1: all_reached = False
-                else: w.move_to(tx, ty)
-            if all_reached: self.is_dealing = False
+                dx = tx - curr_x
+                dy = ty - curr_y
+
+                if abs(dx) <= 1 and abs(dy) <= 1:
+                    w.move_to(tx, ty)
+                    continue
+
+                # Tranh bi ket vi int truncation khi khoang cach con rat nho (vd: 2px).
+                step_x = int(round(dx * 0.1))
+                step_y = int(round(dy * 0.1))
+                if step_x == 0 and dx != 0:
+                    step_x = 1 if dx > 0 else -1
+                if step_y == 0 and dy != 0:
+                    step_y = 1 if dy > 0 else -1
+
+                w.move_to(curr_x + step_x, curr_y + step_y)
+                all_reached = False
+            if all_reached:
+                self.is_dealing = False
+                self.animation_queue = []
+                # Snap lại tọa độ chuẩn sau animation để tránh lệch 1-2px.
+                self.sync_positions()
 
         # Lấy danh sách ID các bài đang bị kéo để không vẽ trùng
         dragging_ids = {id(w) for w in self._drag_widgets}
@@ -581,7 +619,7 @@ class BoardRenderer:
 
         # 4. Vẽ theo thứ tự lớp: Free Cell -> Foundation -> Tableau
         for card in self.state.free_cells: _render_card_item(card)
-        for suit in ("C", "D", "H", "S"):
+        for suit in self.FOUNDATION_ORDER:
             rank = self.state.foundations[suit]
             if rank > 0: _render_card_item(Card(rank=rank, suit=suit))
         for cascade in self.state.cascades:
