@@ -220,7 +220,7 @@ class BoardRenderer:
         self._highlighted_card: Optional[tuple[int, str]] = None
         self._hovered_card: Optional[Card] = None
         self.is_dealing = False
-        self.deal_speed = 0.15 # Tốc độ bay (0.1 đến 0.3 là đẹp)
+        self.deal_speed = 0.5 # Tốc độ bay (0.1 đến 0.3 là đẹp)
         self.animation_queue = [] # Danh sách các lá bài đang bay
 
     # ------------------------------------------------------------------
@@ -562,8 +562,8 @@ class BoardRenderer:
     # ------------------------------------------------------------------
 
     def draw(self, surface: pygame.Surface) -> None:
-        """Vẽ tối ưu: Hào quang -> Bóng đổ -> Lá bài. Bài đang kéo nằm trên cùng."""
-        # 1. Vẽ nền tĩnh
+        """Vẽ tối ưu 3 lớp (Z-order chuẩn): Nền tĩnh -> Bài tĩnh -> Bài đang bay -> Bài đang kéo."""
+        # 1. Vẽ nền
         surface.blit(self._static_surface, (0, 0))
 
         # 2. Xử lý Deal Animation
@@ -599,25 +599,30 @@ class BoardRenderer:
                 # Snap lại tọa độ chuẩn sau animation để tránh lệch 1-2px.
                 self.sync_positions()
 
-        # Lấy danh sách ID các bài đang bị kéo để không vẽ trùng
         dragging_ids = {id(w) for w in self._drag_widgets}
-        # Đảm bảo set này tồn tại để không bị lỗi NameError
         playable = getattr(self, "_playable_cards", set())
 
-        # 3. Hàm nội bộ để vẽ từng lá bài tĩnh
+        # 3. TÁCH LỚP Z-ORDER: Tìm các lá bài đang bay (lệch khỏi vị trí gốc)
+        expected_positions = self.get_card_positions(self.state)
+        flying_cards = []
+
         def _render_card_item(card_data):
             if not card_data: return
             w = self._widgets.get(card_data)
             if not w or id(w) in dragging_ids: return
             
-            # --- VẼ GLOW (Chỉ cho bài hợp lệ đang hover) ---
-            if card_data == self._hovered_card and card_data in playable:
-                self._draw_glow(surface, w.rect)
+            # Nếu tọa độ hiện tại lệch với gốc -> bài đang bay -> Xếp vào danh sách vẽ sau
+            exp_pos = expected_positions.get(card_data)
+            if exp_pos and w.rect.topleft != exp_pos:
+                flying_cards.append(card_data)
+                return
 
-            # --- VẼ SHADOW & CARD ---
+            # Vẽ bài tĩnh (Có Glow nếu hợp lệ)
+            if card_data == getattr(self, "_hovered_card", None) and card_data in playable:
+                self._draw_glow(surface, w.rect)
             self.draw_card_with_shadow(surface, w.image, w.rect.topleft)
 
-        # 4. Vẽ theo thứ tự lớp: Free Cell -> Foundation -> Tableau
+        # LỚP 1: BÀI TĨNH
         for card in self.state.free_cells: _render_card_item(card)
         for suit in self.FOUNDATION_ORDER:
             rank = self.state.foundations[suit]
@@ -625,7 +630,13 @@ class BoardRenderer:
         for cascade in self.state.cascades:
             for card in cascade: _render_card_item(card)
 
-        # 5. CUỐI CÙNG: Vẽ nhóm bài đang kéo để luôn ở trên cùng (Z-order)
+        # LỚP 2: BÀI ĐANG BAY (AI Animator & Deal Animation)
+        # Vẽ sau bài tĩnh nên sẽ luôn nổi lên trên, không bị đè bóng đổ
+        for card_data in flying_cards:
+            w = self._widgets[card_data]
+            self.draw_card_with_shadow(surface, w.image, w.rect.topleft)
+
+        # LỚP 3: BÀI ĐANG KÉO CHUỘT (Cao nhất)
         if self._drag_widgets and self._drag_anchor:
             ax, ay = self._drag_anchor
             for i, w in enumerate(self._drag_widgets):
@@ -724,6 +735,9 @@ class BoardRenderer:
         self.apply_state(state)
         self.is_dealing = True
         self.animation_queue = []
+
+        if getattr(self, 'deal_sound', None):
+            self.deal_sound.play()
         
         center_x = self.screen_rect.width // 2
         center_y = -self.card_h # Bài bay từ cạnh trên màn hình xuống sẽ sinh động hơn
