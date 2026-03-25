@@ -7,6 +7,7 @@ import threading
 import math
 from gui.howto import HowToScreen
 from typing import Dict, List
+from dataclasses import dataclass
 
 import pygame
 
@@ -39,6 +40,11 @@ except ImportError:
 
 SolverResult = UCSSearchResult | AStarResult
 
+@dataclass(frozen=True)
+class ManualHint:
+    move: rules.Move
+    source_label: str
+    target_label: str
 
 class FreeCellApp:
     """Main application controller for FreeCell (scene management + game loop)."""
@@ -124,6 +130,20 @@ class FreeCellApp:
             self.clock.tick(60)
             pygame.event.pump()
 
+    def _transition_and_deal(self) -> None:
+        """Thực hiện chuyển cảnh, lưu trạng thái gốc và chia bài mượt mà."""
+        def setup():
+            self._switch_to_game_screen()
+            # 1. Lưu trạng thái ván bài đầu tiên để dành cho nút Replay
+            self.initial_game_state = self.game.get_state().clone()
+            if hasattr(self, "history"):
+                self.history.clear()
+                self.redo_stack.clear()
+            # 2. Bắt đầu chia bài SAU KHI màn hình đã setup xong (Fix lỗi cụt animation)
+            self.board.start_deal_animation(self.game.get_state())
+            
+        self._scene_transition(setup, "game")
+
     def _go_menu(self) -> None:
         self._play_click_sound()
         self._scene_transition(self._switch_to_menu_screen, "menu")
@@ -151,6 +171,7 @@ class FreeCellApp:
         self.selected_easy_game_index = 0
         self.selected_manual_difficulty = "easy"
         self.victory_timer = 0
+        self.lose_timer = 0
         self.particles = []
         self.lose_particles = []
 
@@ -159,6 +180,14 @@ class FreeCellApp:
         self.hint_font = pygame.font.SysFont("georgia", 24, bold=True)
         self.body_font = pygame.font.SysFont("georgia", 28)
         self.victory_title_font = pygame.font.SysFont("arialblack", 120)
+
+        self.hint_knob_surf = None
+        knob_path = os.path.join(os.path.dirname(__file__), "..", "..", "hint_knob_img.png")
+        if os.path.exists(knob_path):
+            try:
+                self.hint_knob_surf = pygame.image.load(knob_path).convert_alpha()
+            except Exception as e:
+                print(f"Lỗi nạp ảnh knob Hint: {e}")
 
         self.click_sound = None
         click_path = os.path.join(os.path.dirname(__file__), "..", "..", "btn_click.mp3")
@@ -261,6 +290,32 @@ class FreeCellApp:
         if not pygame.mixer.get_init():
             pygame.mixer.init()
 
+        self.btn_icons = {}
+        icon_names = ["new", "replay", "home", "undo", "redo", "hint"]
+        for name in icon_names:
+            p = os.path.join(os.path.dirname(__file__), "..", "..", f"icon_{name}.png")
+            if os.path.exists(p):
+                # Nạp ảnh, giữ nguyên tỷ lệ nhưng resize về kích thước chuẩn (e.g., 36x36px)
+                img = pygame.image.load(p).convert_alpha()
+                # Chỉnh icon về kích thước phù hợp
+                self.btn_icons[name] = pygame.transform.smoothscale(img, (36, 36)) 
+        
+        # Định nghĩa 5 nút: (Tên nút, Icon key)
+        self.bottom_buttons = [
+            ("New game", "new"),
+            ("Replay",   "replay"),
+            ("Home",     "home"),
+            ("Undo",     "undo"),
+            ("Redo",     "redo")
+        ]
+        self.bottom_button_rects = [] # Sẽ tính toán tọa độ trong hàm draw
+        self.hint_btn_rect = pygame.Rect(0, 0, 0, 0)
+        
+        # Cần lưu lại trạng thái đầu ván để làm chức năng REPLAY
+        self.initial_game_state = None
+        self.history = []      # Lưu các bước đã đi để Undo
+        self.redo_stack = []
+
         # Nạp hiệu ứng âm thanh Jackpot
         self.jackpot_sound = None
         sound_path = os.path.join(os.path.dirname(__file__), "..", "..", "jackpot.wav")
@@ -273,6 +328,16 @@ class FreeCellApp:
                 print(f"Error loading jackpot sound: {e}")
 
         self.bg_music_path = os.path.join(os.path.dirname(__file__), "..", "..", "bg_jazz.mp3")
+
+        self.deal_sound = None
+        deal_path = os.path.join(os.path.dirname(__file__), "..", "..", "deal.mp3")
+        if os.path.exists(deal_path):
+            try:
+                self.deal_sound = pygame.mixer.Sound(deal_path)
+                # ĐỂ ÂM LƯỢNG NHỎ (0.2 - 0.3) vì nó sẽ kêu liên tục 52 lần!
+                self.deal_sound.set_volume(0.2) 
+            except Exception as e:
+                print(f"Lỗi nạp âm thanh chia bài: {e}")
 
         if self.scene != "intro":
             self._play_bg_music()
@@ -322,6 +387,7 @@ class FreeCellApp:
         self.view_model = self.game.get_view_model()
         game_rect = pygame.Rect(0, 0, 1366, 768)
         self.board = BoardRenderer(game_rect, loader, self.game.get_state(), self.game, self.view_model)
+        self.board.deal_sound = self.deal_sound
         self.is_stuck = False
 
         self.animator = SolverAnimator(step_delay_ms=500)
@@ -522,6 +588,7 @@ class FreeCellApp:
 
             self._handle_events()
             self._poll_solver_result()
+            self._poll_hint_result()
 
             if self.scene == "game":
                 was_active = self.animator.status.active
@@ -640,6 +707,9 @@ class FreeCellApp:
                 self._reset_victory_state()
                 self._cancel_pending_solver()
                 self.game.new_game()
+                self.initial_game_state = self.game.get_state().clone()
+                self.history.clear()
+                self.redo_stack.clear()
                 self.board.state = self.game.get_state().clone()
                 # self.board.on_reset()
                 self.board.start_deal_animation(self.game.get_state())
@@ -654,6 +724,31 @@ class FreeCellApp:
             
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            
+            # 1. KIỂM TRA CLICK 5 NÚT TRÒN LÊN TRÊN (Chỉ khi chơi tay)
+            if not getattr(self, "ai_solver_mode", False):
+                # 1. KIỂM TRA CLICK NÚT HINT Ở GÓC TRÊN TRƯỚC
+                if not getattr(self, "ai_solver_mode", False):
+                    if hasattr(self, "hint_btn_rect") and self.hint_btn_rect.collidepoint(event.pos):
+                        self._play_click_sound()
+                        self._request_hint() # Gọi logic tìm gợi ý A*
+                        return
+                    for i, rect in enumerate(self.bottom_button_rects):
+                        if rect.collidepoint(event.pos):
+                            btn_name = self.bottom_buttons[i][0]
+                            if btn_name == "New game": 
+                                if getattr(self, "selected_manual_difficulty", "") == "easy":
+                                    self._go_easy_select()
+                                # Nếu ở chế độ Hard hoặc các chế độ khác -> Quay về Menu
+                                else:
+                                    self._go_menu()
+                            elif btn_name == "Replay": self._action_replay()
+                            elif btn_name == "Home": self._go_menu()
+                            elif btn_name == "Undo": self._action_undo()
+                            elif btn_name == "Redo": self._action_redo()
+                            return # Click nút rồi thì thoát, không bốc bài nữa
+
+            # 2. KIỂM TRA CLICK BỐC BÀI
             if not self.ai_solver_mode and not self.is_stuck and not self.animator.status.active:
                 self.board.on_mouse_down(event.pos)
 
@@ -662,9 +757,19 @@ class FreeCellApp:
 
         if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             if not self.ai_solver_mode and not self.is_stuck and not self.animator.status.active:
+                prev_state = self.game.get_state().clone()
                 moved = self.board.on_mouse_up(event.pos)
                 if moved:
+                    if hasattr(self, "history"):
+                        self.history.append(prev_state)
+                        self.redo_stack.clear()
                     self._refresh_game_flags()
+                else:
+                    # Lực hút Snap-back khi thả sai luật
+                    exp_pos = self.board.get_card_positions(self.board.state)
+                    for card_data, pos in exp_pos.items():
+                        w = self.board._widgets.get(card_data)
+                        if w: w.rect.topleft = pos
 
     def _start_manual_game(self, difficulty: str) -> None:
         self._play_click_sound()
@@ -695,7 +800,7 @@ class FreeCellApp:
             self._refresh_game_flags()
             self.solver_message = "No Easy sample deals found. Started a random shuffle."
             self.board.set_board_bg(self._board_bgs.get("manual"))
-            self._scene_transition(self._switch_to_game_screen, "game")
+            self._transition_and_deal()
             return
         self.solver_algorithm = "ucs"
         self.solver_label = "UCS"
@@ -705,13 +810,16 @@ class FreeCellApp:
             self.solver_message = f"Loaded {difficulty.title()} sample: {self.last_loaded_sample}"
         else:
             self.game.new_game()
+            self.initial_game_state = self.game.get_state().clone()
+            self.history.clear()
+            self.redo_stack.clear()
             self.board.state = self.game.get_state().clone()
             self.board.on_reset()
             self._refresh_game_flags()
             self.solver_message = f"No {difficulty.title()} sample deals found. Started a random shuffle."
 
         self.board.set_board_bg(self._board_bgs.get("manual"))
-        self._scene_transition(self._switch_to_game_screen, "game")
+        self._transition_and_deal()
 
     def _set_selected_easy_game_index(self, index: int) -> None:
         easy_games = self._sample_games_by_difficulty.get("easy", [])
@@ -725,13 +833,15 @@ class FreeCellApp:
         if not easy_games:
             self._play_click_sound()
             self.game.new_game(seed=None)
+            self.initial_game_state = self.game.get_state().clone()
+            self.history.clear()
+            self.redo_stack.clear()
             self._update_game_from_state()
             self.board.start_deal_animation(self.game.get_state())
             self._refresh_game_flags()
             self.solver_message = "No Easy sample deals found. Started a random shuffle."
             self.board.set_board_bg(self._board_bgs.get("manual"))
-            self._switch_to_game_screen()
-            self.scene = "game"
+            self._transition_and_deal()
             self.board.start_deal_animation(self.game.get_state())
             return
 
@@ -753,6 +863,7 @@ class FreeCellApp:
         self.board.set_board_bg(self._board_bgs.get("manual"))
         self._switch_to_game_screen()
         self.scene = "game"
+        self._transition_and_deal()
 
     def _start_solver_game(self, algorithm: str = "ucs") -> None:
         self._play_click_sound()
@@ -789,7 +900,7 @@ class FreeCellApp:
 
         
         self.board.set_board_bg(self._board_bgs.get(algorithm))
-        self._scene_transition(self._switch_to_game_screen, "game")
+        self._transition_and_deal()
         self._launch_solver_async()
 
     def _launch_solver_async(self) -> None:
@@ -855,6 +966,7 @@ class FreeCellApp:
         self.board.set_highlighted_card(None)
 
     def _poll_solver_result(self) -> None:
+        """Kiểm tra kết quả từ luồng chạy ngầm của AI và cập nhật trạng thái game."""
         if not self._solver_pending:
             return
 
@@ -867,57 +979,83 @@ class FreeCellApp:
         if self._solver_async_result is None:
             return
 
+        # Lấy kết quả ra và reset cờ đợi
         result = self._solver_async_result
         self._solver_async_result = None
         self._solver_pending = False
         self.solver_result = result
 
+        # --- TRƯỜNG HỢP 1: AI TÌM RA ĐƯỜNG GIẢI (VICTORY) ---
         if result.solved:
             self._solver_stage_idx = 0
-            name = self.last_loaded_sample or "random shuffle"
-            if isinstance(result, UCSSearchResult):
-                total_steps = self._ai_total_applied_moves + result.metrics.solution_steps
-                result.metrics.solution_steps = total_steps
-                self.solver_message = (
-                    f"{self.solver_label}: {name} - "
-                    f"{total_steps} steps, "
-                    f"{result.metrics.elapsed_seconds:.2f}s"
-                )
-            else:
-                total_steps = self._ai_total_applied_moves + len(result.moves)
-                self.solver_message = (
-                    f"{self.solver_label}: {name} - "
-                    f"{total_steps} steps, "
-                    f"{result.expanded_nodes} expanded"
-                )
+            self.solver_message = f"Victory! {self.solver_label} found a solution in {len(result.moves)} steps."
             self.animator.animate_solution(result.state_path)
             self.is_animating = True
             return
 
-        self._solver_stage_idx = min(self._solver_stage_idx + 1, len(self._solver_stages) - 1)
-        if self._solver_renders_partial_progress() and len(result.state_path) > 1:
-            self._solver_stage_idx = 0
-            self.animator.animate_solution(result.state_path)
-            self.is_animating = True
-            self.solver_message = (
-                f"{self.solver_label}: advanced {len(result.state_path) - 1} moves - continuing..."
-            )
+        # --- TRƯỜNG HỢP 2: CHƯA XONG, CẦN XỬ LÝ TIẾP (POLLING) ---
+        
+        # Tăng cấp độ tìm kiếm (Stage)
+        max_stage = len(self._solver_stages) - 1
+        is_final_stage = (self._solver_stage_idx >= max_stage)
+        self._solver_stage_idx = min(self._solver_stage_idx + 1, max_stage)
+
+        # Kiểm tra xem AI có bị "bí" hoàn toàn không (Game Over)
+        # A* có cờ exhausted, còn IDS nếu tới stage cuối mà không solved thì coi như Game Over
+        is_exhausted = False
+        if self.solver_algorithm == "a_star":
+            is_exhausted = (self._a_star_session is not None and self._a_star_session.exhausted)
+        elif is_final_stage:
+            is_exhausted = True
+
+        if is_exhausted:
+            self.solver_message = f"Game Over! {self.solver_label} could not find a solution."
+            self.is_stuck = True # Kích hoạt hiệu ứng sương khói mờ ảo
             return
 
-        if isinstance(result, UCSSearchResult):
+        # Cập nhật tin nhắn tiến độ (Fix lỗi AttributeError bằng cách kiểm tra .metrics)
+        if hasattr(result, 'metrics'):
+            # Dành cho UCS và IDS (DFS) - Dữ liệu nằm trong metrics
+            nodes = result.metrics.expanded_nodes
+            sec = result.metrics.elapsed_seconds
             self.solver_message = (
-                f"{self.solver_label}: searching deeper "
-                f"({result.metrics.expanded_nodes} nodes, {result.metrics.elapsed_seconds:.1f}s)..."
+                f"{self.solver_label}: searching deeper ({nodes} nodes, {sec:.1f}s)..."
             )
         else:
-            if self._a_star_session is not None and self._a_star_session.exhausted:
-                self.solver_message = f"{self.solver_label}: no solution found from this state."
-                return
+            # Dành cho A* - Dữ liệu nằm trực tiếp ở lớp ngoài
+            exp = getattr(result, 'expanded_nodes', 0)
+            gen = getattr(result, 'generated_nodes', 0)
             self.solver_message = (
-                f"{self.solver_label}: still searching for full solution "
-                f"({result.expanded_nodes} expanded, {result.generated_nodes} generated)..."
+                f"{self.solver_label}: searching ({exp} expanded, {gen} generated)..."
             )
+
+        # Nếu thuật toán cho phép hiển thị tiến độ từng phần (như UCS)
+        if self._solver_renders_partial_progress() and len(result.state_path) > 1:
+            self._solver_stage_idx = 0 # Reset về stage 0 để tiếp tục từ vị trí mới
+            self.animator.animate_solution(result.state_path)
+            self.is_animating = True
+            self.solver_message = f"{self.solver_label}: advanced {len(result.state_path) - 1} moves - continuing..."
+            return
+
+        # Tiếp tục phóng luồng tìm kiếm mới sâu hơn
         self._launch_solver_async()
+        # --- XỬ LÝ KHI AI BỊ KẸT (STUCK) ---
+        max_stage = len(self._solver_stages) - 1
+        is_final_stage = (self._solver_stage_idx >= max_stage)
+        
+        # Nếu là A* và đã cạn kiệt, hoặc là IDS đã tới Stage cuối cùng
+        is_exhausted = False
+        if self.solver_algorithm == "a_star":
+            is_exhausted = (self._a_star_session is not None and self._a_star_session.exhausted)
+        elif is_final_stage:
+            is_exhausted = True
+
+        if is_exhausted:
+            self.is_stuck = True # Kích hoạt hiệu ứng và bắt đầu đếm lose_timer
+            self._play_lose_music()
+            self.solver_message = f"Game Over! {self.solver_label} could not find a solution."
+            return
+
 
     def _discover_sample_games(self) -> List[str]:
         if not os.path.isdir(SOLUTION_DIR):
@@ -1252,6 +1390,7 @@ class FreeCellApp:
     def _reset_victory_state(self):
         """Dọn dẹp sạch sẽ hiệu ứng ăn mừng để không bị lây sang ván sau."""
         self.victory_timer = 0
+        self.lose_timer = 0
         self.particles = []
         self.lose_particles = []
 
@@ -1277,6 +1416,8 @@ class FreeCellApp:
         elif self.scene == "game":
             self.board.draw(self.screen)
             self._draw_game_hud()
+            if not getattr(self, "ai_solver_mode", False):
+                self._draw_bottom_toolbar()
             self._draw_ai_thinking_cocktail()
             self._draw_lose_celebration()
             self._draw_victory_celebration()
@@ -1284,30 +1425,60 @@ class FreeCellApp:
             self._draw_ai_selector()
 
     def _draw_game_hud(self) -> None:
-        h = self.screen.get_height()
+            """Vẽ HUD: Ẩn nút Hint khi AI chạy, hiện thông báo AI xuyên suốt."""
+            w, h = self.screen.get_width(), self.screen.get_height()
+            mp = pygame.mouse.get_pos()
         
-        hint = self.hint_font.render("ESC: Menu   |   R: New Shuffle", True, (255, 250, 205))
-        # Luôn cách đáy màn hình 14px
-        self.screen.blit(hint, (18, h - hint.get_height() - 14))
-
-        if self.is_animating:
-            progress = self.hint_font.render(
-                f"{self.solver_label} Auto-play: {self.animator.status.applied_moves}/{self.animator.status.total_moves}",
-                True,
-                (255, 250, 180),
-            )
-            self.screen.blit(progress, (18, 16))
-        elif self.solver_message:
-            msg = self.hint_font.render(self.solver_message, True, (255, 245, 180))
-            self.screen.blit(msg, (18, 16))
-
-        if self.is_stuck:
-            w, h = self.screen.get_size()
+            # --- KHỐI 1: CHỈ VẼ NÚT HINT KHI ĐANG CHƠI TAY (KHÔNG PHẢI AI MODE) ---
+            if not getattr(self, "ai_solver_mode", False):
+                radius = 26
+                btn_w = 140
+                self.hint_btn_rect = pygame.Rect(w - btn_w - 40, 20, btn_w, radius * 2)
+                is_hover = self.hint_btn_rect.collidepoint(mp)
+            
+                # Màu sắc nút (Vàng Gold rực lên khi di chuột)
+                color = (255, 215, 0) if is_hover else (212, 175, 55)
         
+                # 1. Vẽ khung viên thuốc (Capsule) màu Đỏ đô
+                pygame.draw.rect(self.screen, (128, 0, 32), self.hint_btn_rect, border_radius=radius)
+                knob_center = (self.hint_btn_rect.x + radius, self.hint_btn_rect.centery)
+            
+                # 2. Vẽ Núm xoay (Knob) - Đảm bảo phần này nằm TRONG khối if để có biến 'radius'
+                if self.hint_knob_surf:
+                    # Tạo mặt nạ tròn để ảnh không bị tràn ra ngoài
+                    knob_size = (radius * 2 - 4, radius * 2 - 4)
+                    temp_knob_surf = pygame.Surface(knob_size, pygame.SRCALPHA)
+                    pygame.draw.circle(temp_knob_surf, (255, 255, 255), (knob_size[0]//2, knob_size[1]//2), radius - 2)
+                
+                    # Co giãn và dán ảnh không trong suốt đè lên
+                    scaled_knob = pygame.transform.smoothscale(self.hint_knob_surf, knob_size)
+                    temp_knob_surf.blit(scaled_knob, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+                
+                    self.screen.blit(temp_knob_surf, (knob_center[0] - knob_size[0]//2, knob_center[1] - knob_size[1]//2))
+                else:
+                    # Nếu không có ảnh, vẽ màu nền tối làm lỗ hổng
+                    pygame.draw.circle(self.screen, (20, 45, 25), knob_center, radius - 2)
 
-        # if self.ai_solver_mode and not self.is_animating and not rules.is_goal(self.game.get_state()):
-        #    lock = self.hint_font.render("AI Solver mode: manual card movement is disabled.", True, (255, 236, 170))
-        #    self.screen.blit(lock, (18, 48))
+                # 3. Vẽ viền Gold cho núm xoay đè lên trên cùng
+                pygame.draw.circle(self.screen, color, knob_center, radius - 2, width=2)
+            
+                # 4. Vẽ chữ "Hint" và icon (nếu có)
+                txt_color = (255, 223, 100) if is_hover else (244, 236, 206)
+                lbl = self.body_font.render("Hint", True, txt_color)
+                self.screen.blit(lbl, (knob_center[0] + radius + 10, self.hint_btn_rect.centery - lbl.get_height() // 2))
+
+                # 5. Phím tắt trợ giúp ở góc dưới bên trái
+                hint_txt = self.hint_font.render("ESC: Menu   |   R: New Shuffle", True, (255, 250, 205))
+                self.screen.blit(hint_txt, (18, h - hint_txt.get_height() - 14))
+
+            # --- KHỐI 2: HIỂN THỊ THÔNG BÁO AI (LUÔN HIỆN CHO CẢ 2 CHẾ ĐỘ) ---
+            if self.is_animating:
+                # Thông báo khi bài đang tự động di chuyển
+                status = f"{self.solver_label} Auto-play: {self.animator.status.applied_moves}/{self.animator.status.total_moves}"
+                self.screen.blit(self.hint_font.render(status, True, (255, 250, 180)), (18, 16))
+            elif self.solver_message:
+                # Thông báo trạng thái tìm kiếm hoặc kết quả (Victory/Game Over)
+                self.screen.blit(self.hint_font.render(self.solver_message, True, (255, 245, 180)), (18, 16))
 
     def _draw_ai_thinking_cocktail(self):
         """Vẽ icon ly cocktail thu nhỏ, thẳng hàng và rực rỡ (Nâng cấp Pro)."""
@@ -1376,18 +1547,18 @@ class FreeCellApp:
     #    self.is_stuck = (not is_won) and (not has_moves)
 
     def _refresh_game_flags(self) -> None:
-        # Nếu đang trong chế độ test phím 'L', không cho phép tự động tính toán lại
-        # (Để hiệu ứng thua không bị mất ngay lập tức)
-        if self.solver_message.startswith("DEBUG: You pressed 'L'"):
+        """Không cho phép reset trạng thái nếu đang hiện hiệu ứng thua cuộc."""
+        # Nếu đang ở màn hình báo thua (do phím L hoặc AI kẹt), không tính toán lại
+        if self.is_stuck:
             return
 
         self.view_model = self.game.get_view_model()
         is_won = self.view_model["is_goal"]
         has_moves = len(self.view_model.get("legal_moves", [])) > 0
-        was_stuck = getattr(self, "is_stuck", False)
-        self.is_stuck = (not is_won) and (not has_moves)
-
-        if self.is_stuck and not was_stuck:
+        
+        # Chỉ tự động bật Stuck khi thực sự hết nước đi trong chế độ chơi tay
+        if (not is_won) and (not has_moves):
+            self.is_stuck = True
             self._play_lose_music()
 
     def _spawn_victory_particles(self):
@@ -1403,38 +1574,54 @@ class FreeCellApp:
             })
 
     def _update_victory_logic(self):
-        """Cập nhật vị trí tiền rơi và kiểm tra thời gian quay về menu."""
-        # --- THÊM ĐIỀU KIỆN CHẶN TẠI ĐÂY ---
-        # 1. Chỉ chạy khi đang ở màn hình Game
-        # 2. Không chạy khi AI đang di chuyển bài (is_animating)
+        """Quản lý hiệu ứng: AI Stuck tự thoát, Manual Stuck đợi người chơi."""
+        # 1. ĐIỀU KIỆN CHẶN: Không chạy khi đang chuyển cảnh hoặc AI đang di chuyển bài
         if self.scene != "game" or self.is_animating:
             return
-        # ----------------------------------
 
-        # Nếu chưa thắng thì thoát luôn
-        if not rules.is_goal(self.game.get_state()):
+        state = self.game.get_state()
+        is_won = rules.is_goal(state)
+
+        # 2. XỬ LÝ KHI CHIẾN THẮNG (VICTORY)
+        if is_won:
+            if self.victory_timer == 0 and self.jackpot_sound:
+                self.jackpot_sound.play() 
+            self.victory_timer += 1
+            self._spawn_victory_particles()
+            
+            for p in self.particles[:]:
+                p["pos"][0] += p["vel"][0]
+                p["pos"][1] += p["vel"][1]
+                if p["pos"][1] > self.screen.get_height():
+                    self.particles.remove(p)
+
+            if self.victory_timer > 300: # Sau 5 giây
+                self._reset_victory_state()
+                self._go_menu()
             return
 
-        # Khi victory_timer bắt đầu từ 0 sang 1, phát âm thanh
-        if self.victory_timer == 0 and self.jackpot_sound:
-            self.jackpot_sound.play() 
+        # 3. XỬ LÝ KHI BỊ KẸT (STUCK/GAME OVER)
+        if self.is_stuck:
+            self._spawn_lose_particles() # Hiệu ứng sương khói mờ ảo
+            
+            # Cập nhật chuyển động sương khói trôi ngang
+            w, _ = self.screen.get_size()
+            for p in self.lose_particles[:]:
+                p["pos"][0] += p["vel"][0]
+                p["pos"][1] += p["vel"][1]
+                p["life"] -= 1
+                if p["life"] <= 0 or p["pos"][0] > w + 100:
+                    self.lose_particles.remove(p)
 
-        self.victory_timer += 1
-        self._spawn_victory_particles()
-
-        # Cập nhật tọa độ tiền rơi
-        for p in self.particles[:]:
-            p["pos"][0] += p["vel"][0]
-            p["pos"][1] += p["vel"][1]
-            if p["pos"][1] > self.screen.get_height():
-                self.particles.remove(p)
-
-        # Sau khoảng 5 giây, tự động về menu
-        if self.victory_timer > 300:
-            self.victory_timer = 0
-            self.particles = []
-            self.ai_solver_mode = False
-            self._go_menu()
+            # CHỈ TỰ THOÁT NẾU ĐANG TRONG CHẾ ĐỘ AI SOLVER
+            if getattr(self, "ai_solver_mode", False):
+                self.lose_timer += 1
+                if self.lose_timer > 300: # Sau 5 giây
+                    self._reset_victory_state()
+                    self.is_stuck = False
+                    self._go_menu()
+        else:
+            self.lose_timer = 0
 
     def _draw_victory_celebration(self):
         """Vẽ VICTORY 3D với viền Burnt Coffee và hiệu ứng vệt sáng kim loại (Glint)."""
@@ -1551,3 +1738,311 @@ class FreeCellApp:
 
         sub_msg = self.menu_font.render("So close! Press 'R' to try again", True, (180, 180, 180))
         self.screen.blit(sub_msg, (w // 2 - sub_msg.get_width() // 2, ty + msg_surf.get_height() + 20))
+
+
+    def _draw_bottom_toolbar(self) -> None:
+        """Vẽ Toolbar 5 nút KHUNG TRÒN, VIỀN GOLD RỰC RỠ, CHỈ CÓ ICON."""
+        w, h = self.screen.get_width(), self.screen.get_height()
+        
+        # --- CẤU HÌNH MỚI: DỊCH CHUYỂN CÁC NÚT LÊN TRÊN ---
+        # Radius của khung tròn (tăng nhẹ lên 30px để icon thoáng)
+        radius = 30 
+        gap = 35 # Khoảng cách giữa các vòng tròn
+        
+        # Dịch chuyển lên trên: Cách đáy màn hình 150px (thay vì sát đáy)
+        center_y = h - 60
+
+        hint_btn_w = 150
+        
+        total_w = len(self.bottom_buttons) * (radius * 2) + (len(self.bottom_buttons) - 1) * gap
+        start_x = w // 2 - total_w // 2 + radius # Căn giữa
+        
+        mp = pygame.mouse.get_pos()
+        self.bottom_button_rects = [] # Xóa tọa độ cũ, dùng để check click
+        
+        # Định nghĩa màu Vàng Gold sang trọng từ Poker Chip
+        GOLD = (212, 175, 55)         # Vàng Gold chuẩn
+        GOLD_BRIGHT = (255, 215, 0) # Vàng rực khi Hover
+        
+        for i, (name, icon_key) in enumerate(self.bottom_buttons):
+            cx = start_x + i * (radius * 2 + gap)
+            center = (cx, center_y)
+            
+            # Tính toán va chạm dựa trên hình tròn (distance)
+            dist = math.hypot(mp[0] - center[0], mp[1] - center[1])
+            is_hover = dist < radius
+            
+            # Ghi lại rect bao quanh vòng tròn để check click chuột
+            click_rect = pygame.Rect(cx - radius, center_y - radius, radius * 2, radius * 2)
+            self.bottom_button_rects.append(click_rect)
+            
+            # Màu viền rực lên khi hover
+            border_color = GOLD_BRIGHT if is_hover else GOLD
+            
+            # --- VẼ NÚT KHUNG TRÒN VIỀN VÀNG RỰC RỠ ---
+            # Vẽ viền tròn độ dày 3px
+            pygame.draw.circle(self.screen, border_color, center, radius, width=3)
+            
+            # Nếu hover, vẽ một lớp nền mờ nhẹ bên trong vòng tròn cho sang trọng
+            if is_hover:
+                overlay = pygame.Surface((radius*2, radius*2), pygame.SRCALPHA)
+                pygame.draw.circle(overlay, (border_color[0], border_color[1], border_color[2], 40), (radius, radius), radius-3)
+                self.screen.blit(overlay, (cx - radius, center_y - radius))
+            
+            # --- BỎ CHỮ, CHỈ VẼ ICON VÀO CHÍNH GIỮA KHUNG TRÒN ---
+            icon = self.btn_icons.get(icon_key)
+            if icon:
+                # Icon đã được resize trong __init__, giờ chỉ cần căn giữa
+                icon_x = center[0] - icon.get_width() // 2
+                icon_y = center[1] - icon.get_height() // 2
+                self.screen.blit(icon, (icon_x, icon_y))
+
+    def _action_new_game(self) -> None:
+        self._play_click_sound()
+        self.game.new_game()
+        self._update_game_from_state()
+        self._transition_and_deal() # Chuyển cảnh làm tối màn hình và xào bài lại
+
+    def _action_replay(self) -> None:
+        self._play_click_sound()
+        if getattr(self, "initial_game_state", None):
+            self.game.set_state(self.initial_game_state.clone())
+            self._update_game_from_state()
+            self.history.clear()
+            self.redo_stack.clear()
+            self._refresh_game_flags()
+            self.solver_message = "Replaying current deal."
+            self.board.start_deal_animation(self.game.get_state())
+
+    def _action_undo(self) -> None:
+        self._play_click_sound()
+        if getattr(self, "history", []):
+            self.redo_stack.append(self.game.get_state().clone())
+            self.game.set_state(self.history.pop())
+            self._update_game_from_state()
+            self._refresh_game_flags()
+
+    def _action_redo(self) -> None:
+        self._play_click_sound()
+        if getattr(self, "redo_stack", []):
+            self.history.append(self.game.get_state().clone())
+            self.game.set_state(self.redo_stack.pop())
+            self._update_game_from_state()
+            self._refresh_game_flags()
+
+
+    def _cancel_pending_hint(self) -> None:
+        self._hint_job_id += 1
+        self._hint_pending = False
+        self._hint_async_result = None
+        self._hint_async_error = None
+
+    def _request_hint(self) -> None:
+        if self._hint_pending:
+            return
+
+        self._clear_hint()
+        snapshot = self.game.get_state().clone()
+        self._hint_job_id += 1
+        job_id = self._hint_job_id
+        self._hint_pending = True
+        self._hint_async_result = None
+        self._hint_async_error = None
+        self.solver_message = "Hint (A*): searching a fast suggestion..."
+
+        def worker() -> None:
+            try:
+                session = AStarSearchSession(
+                    snapshot,
+                    heuristic="blocking",
+                    heuristic_weight=2.0,
+                )
+                result = session.advance(max_nodes=35_000, max_time_seconds=0.8)
+                hint: ManualHint | None = None
+                if result.moves:
+                    first_move = result.moves[0]
+                    if self._card_from_move(snapshot, first_move) is not None:
+                        hint = ManualHint(
+                            move=first_move,
+                            source_label=self._source_label_from_move(first_move),
+                            target_label=self._target_label_from_move(first_move),
+                        )
+
+                if hint is None:
+                    fallback_move = self._fallback_hint_move(snapshot)
+                    if fallback_move is not None:
+                        hint = ManualHint(
+                            move=fallback_move,
+                            source_label=self._source_label_from_move(fallback_move),
+                            target_label=self._target_label_from_move(fallback_move),
+                        )
+
+                if self._hint_job_id == job_id:
+                    self._hint_async_result = hint if hint is not None else False
+            except Exception as exc:
+                if self._hint_job_id == job_id:
+                    self._hint_async_error = str(exc)
+
+        self._hint_thread = threading.Thread(target=worker, daemon=True)
+        self._hint_thread.start()
+
+    def _poll_hint_result(self) -> None:
+        if not self._hint_pending:
+            return
+
+        if self._hint_async_error:
+            self._hint_pending = False
+            self.solver_message = f"Hint error: {self._hint_async_error}"
+            self._hint_async_error = None
+            return
+
+        if self._hint_async_result is None:
+            return
+
+        result = self._hint_async_result
+        self._hint_async_result = None
+        self._hint_pending = False
+        if result is False or result is None:
+            current_state = self.game.get_state()
+            fallback_move = self._fallback_hint_move(current_state)
+            if fallback_move is not None:
+                fallback_card = self._card_from_move(current_state, fallback_move)
+                if fallback_card is not None:
+                    self.current_hint = ManualHint(
+                        move=fallback_move,
+                        source_label=self._source_label_from_move(fallback_move),
+                        target_label=self._target_label_from_move(fallback_move),
+                    )
+                    self.board.set_highlighted_card(fallback_card)
+                else:
+                    self._clear_hint()
+            else:
+                self._clear_hint()
+
+            self.solver_message = "Hint: Try moving any highlighted card or clearing a column."
+            return
+
+        self._show_hint(result)
+
+    def _clear_hint(self) -> None:
+        self.current_hint = None
+        self.board.set_highlighted_card(None)
+
+    def _format_location(self, location: tuple[str, int] | tuple[str, int, int]) -> str:
+        zone = location[0]
+        index = location[1]
+        if zone == "cascade":
+            return f"Tableau {index + 1}"
+        if zone == "freecell":
+            return f"Free Cell {index + 1}"
+        if isinstance(index, str):
+            suit_names = {"C": "Clubs", "D": "Diamonds", "H": "Hearts", "S": "Spades"}
+            return f"Foundation {suit_names.get(index, index)}"
+        suit_names = ["Spades", "Hearts", "Clubs", "Diamonds"]
+        return f"Foundation {suit_names[index]}"
+
+    def _format_card(self, card) -> str:
+        ranks = {1: "A", 11: "J", 12: "Q", 13: "K"}
+        rank_label = ranks.get(card.rank, str(card.rank))
+        suit_label = {"C": "Clubs", "D": "Diamonds", "H": "Hearts", "S": "Spades"}.get(card.suit, str(card.suit).title())
+        return f"{rank_label} of {suit_label}"
+
+    def _card_from_move(self, state, move: rules.Move):
+        if move.src_type == rules.LOCATION_FREE_CELL:
+            if 0 <= move.src_index < len(state.free_cells):
+                return state.free_cells[move.src_index]
+            return None
+
+        if move.src_type == rules.LOCATION_CASCADE:
+            if not (0 <= move.src_index < len(state.cascades)):
+                return None
+            cascade = state.cascades[move.src_index]
+            idx = len(cascade) - move.count
+            return cascade[idx] if 0 <= idx < len(cascade) else None
+        return None
+
+    def _fallback_hint_move(self, state: State) -> rules.Move | None:
+        legal_moves = rules.enumerate_legal_moves(state)
+        if not legal_moves:
+            return None
+
+        def _priority(move: rules.Move) -> tuple[int, int, int, int]:
+            if move.dst_type == rules.LOCATION_FOUNDATION:
+                return (0, 0, 0, -move.count)
+            if move.src_type == rules.LOCATION_FREE_CELL and move.dst_type == rules.LOCATION_CASCADE:
+                return (1, 0, 0, -move.count)
+            if move.src_type == rules.LOCATION_CASCADE and move.dst_type == rules.LOCATION_CASCADE:
+                return (2, 0, 0, -move.count)
+            if move.src_type == rules.LOCATION_CASCADE and move.dst_type == rules.LOCATION_FREE_CELL:
+                return (3, 0, 0, move.count)
+            return (4, 0, 0, move.count)
+
+        return min(legal_moves, key=_priority)
+
+    def _source_label_from_move(self, move: rules.Move) -> str:
+        if move.src_type == rules.LOCATION_CASCADE:
+            return f"Tableau {move.src_index + 1}"
+        if move.src_type == rules.LOCATION_FREE_CELL:
+            return f"Free Cell {move.src_index + 1}"
+        return "Unknown"
+
+    def _target_label_from_move(self, move: rules.Move) -> str:
+        if move.dst_type == rules.LOCATION_CASCADE:
+            return f"Tableau {move.dst_index + 1}"
+        if move.dst_type == rules.LOCATION_FREE_CELL:
+            return f"Free Cell {move.dst_index + 1}"
+        if move.dst_type == rules.LOCATION_FOUNDATION:
+            suit_names = {"C": "Clubs", "D": "Diamonds", "H": "Hearts", "S": "Spades"}
+            return f"Foundation {suit_names.get(move.dst_index, move.dst_index)}"
+        return "Unknown"
+
+    def _show_hint(self, hint: ManualHint | None) -> None:
+        if hint is None:
+            self._clear_hint()
+            self.solver_message = "Hint: no strong move found from the current position."
+            return
+
+        current_state = self.game.get_state()
+        if not rules.is_legal_move(current_state, hint.move):
+            fallback_move = self._fallback_hint_move(current_state)
+            if fallback_move is None:
+                self._clear_hint()
+                self.solver_message = "Hint: Try moving any highlighted card or clearing a column."
+                return
+            hint = ManualHint(
+                move=fallback_move,
+                source_label=self._source_label_from_move(fallback_move),
+                target_label=self._target_label_from_move(fallback_move),
+            )
+
+        card = self._card_from_move(current_state, hint.move)
+        if card is None:
+            fallback_move = self._fallback_hint_move(current_state)
+            if fallback_move is None:
+                self._clear_hint()
+                self.solver_message = "Hint: Try moving any highlighted card or clearing a column."
+                return
+            hint = ManualHint(
+                move=fallback_move,
+                source_label=self._source_label_from_move(fallback_move),
+                target_label=self._target_label_from_move(fallback_move),
+            )
+            card = self._card_from_move(current_state, hint.move)
+            if card is None:
+                self._clear_hint()
+                self.solver_message = "Hint: Try moving any highlighted card or clearing a column."
+                return
+
+        self.current_hint = hint
+        self.board.set_highlighted_card(card)
+
+        if hint.move.count > 1:
+            self.solver_message = (
+                f"Hint (A*): move sequence ({hint.move.count} cards), starting with "
+                f"{self._format_card(card)} from {hint.source_label} to {hint.target_label}."
+            )
+        else:
+            self.solver_message = (
+                f"Hint (A*): move {self._format_card(card)} from {hint.source_label} "
+                f"to {hint.target_label}."
+            )

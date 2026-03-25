@@ -219,7 +219,7 @@ class BoardRenderer:
         self._highlighted_card: Optional[tuple[int, str]] = None
         self._hovered_card: Optional[Card] = None
         self.is_dealing = False
-        self.deal_speed = 0.15 # Tốc độ bay (0.1 đến 0.3 là đẹp)
+        self.deal_speed = 0.5 # Tốc độ bay (0.1 đến 0.3 là đẹp)
         self.animation_queue = [] # Danh sách các lá bài đang bay
 
     # ------------------------------------------------------------------
@@ -697,6 +697,9 @@ class BoardRenderer:
         self.apply_state(state)
         self.is_dealing = True
         self.animation_queue = []
+
+        if getattr(self, 'deal_sound', None):
+            self.deal_sound.play()
         
         center_x = self.screen_rect.width // 2
         center_y = -self.card_h # Bài bay từ cạnh trên màn hình xuống sẽ sinh động hơn
