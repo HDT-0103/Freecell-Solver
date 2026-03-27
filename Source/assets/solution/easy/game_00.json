@@ -1,0 +1,19 @@
+{
+  "cascades": [
+    ["KH", "QH", "JH", "TH", "9H", "8H", "7H"],
+    ["KD", "QD", "JD", "TD", "9D", "8D", "7D"],
+    ["KC", "QC", "JC", "TC", "9C", "8C", "7C"],
+    ["KS", "QS", "JS", "TS", "9S", "8S", "7S"],
+    ["6H", "5H", "4H", "3H", "2H", "AH"],
+    ["6D", "5D", "4D", "3D", "2D", "AD"],
+    ["6C", "5C", "4C", "3C", "2C", "AC"],
+    ["6S", "5S", "4S", "3S", "2S", "AS"]
+  ],
+  "free_cells": [null, null, null, null],
+  "foundations": {
+    "C": 0,
+    "D": 0,
+    "H": 0,
+    "S": 0
+  }
+}
