@@ -121,6 +121,30 @@ def _build_state_path(start_state: State, moves_seq: List[SearchMove]) -> List[S
     return path
 
 
+def get_move_cost(move: SearchMove, state: State) -> int:
+    """Return dynamic UCS step cost based on move type and immediate board effect."""
+    source, target = move
+    src_type, src_index, src_start = source
+    dst_type, _ = target
+
+    if dst_type == "foundation":
+        return 1
+
+    # Reward creating a new empty cascade by moving the whole source cascade away.
+    if src_type == "cascade":
+        cascade = state.cascades[src_index]
+        if len(cascade) > 0 and src_start == 0:
+            return 5
+
+    if src_type == "cascade" and dst_type == "cascade":
+        return 10
+
+    if dst_type == "freecell":
+        return 50
+
+    return 10
+
+
 def solve_ucs(
     initial_state: State,
     max_nodes: int = 500_000,
@@ -170,7 +194,7 @@ def solve_ucs(
 
             for move, next_state in _generate_single_card_moves(state):
                 next_key = next_state.as_key()
-                next_g = g_cost + 1
+                next_g = g_cost + get_move_cost(move, state)
                 if next_g < best_g.get(next_key, 10**18):
                     best_g[next_key] = next_g
                     parent[next_key] = key
