@@ -30,7 +30,7 @@ from gui.hud import draw_solver_stats, draw_win_or_lose_overlay
 from gui.interface import BoardRenderer, CardImageLoader
 from gui.menu import MenuScreen
 from solvers.ucs import UCSSearchResult, solve_ucs
-from solvers.a_star import AStarResult, AStarSearchSession, solve_a_star
+from solvers.a_star import AStarResult, AStarSearchSession
 try:
     from solvers.bfs import solve_bfs
 except ImportError:
