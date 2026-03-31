@@ -716,27 +716,12 @@ class FreeCellApp:
                 self.is_stuck = True
                 self.solver_message = "DEBUG: You pressed 'L' to trigger Lose screen."
                 self._play_lose_music()
-            elif event.key == pygame.K_r:
-                self._play_click_sound()
-                self._reset_victory_state()
-                self._cancel_pending_solver()
-                self.game.new_game()
-                self.initial_game_state = self.game.get_state().clone()
-                self.history.clear()
-                self.redo_stack.clear()
-                self.board.state = self.game.get_state().clone()
-                # self.board.on_reset()
-                self.game_start_tick = pygame.time.get_ticks()
-                self.timer_active = True
-                self.final_game_time = 0
-                self.board.start_deal_animation(self.game.get_state())
-                self.animator.clear()
-                self.is_animating = False
-                self.ai_solver_mode = False
-                self._ai_total_applied_moves = 0
-                self.solver_result = None
-                self.solver_message = ""
-                self._refresh_game_flags()
+            elif (
+                event.key == pygame.K_r
+                and not self.ai_solver_mode
+                and (self.is_stuck or rules.is_goal(self.game.get_state()))
+            ):
+                self._action_replay()
             
             
 
@@ -1810,7 +1795,9 @@ class FreeCellApp:
             self.screen.blit(lbl, (knob_center[0] + radius + 10, self.hint_btn_rect.centery - lbl.get_height() // 2))
 
             # 5. Phím tắt trợ giúp ở góc dưới bên trái
-            hint_txt = self.hint_font.render("ESC: Menu   |   R: New Shuffle", True, (255, 250, 205))
+            show_restart_hint = self.is_stuck
+            hint_label = "ESC: Menu   |   R: Restart deal" if show_restart_hint else "ESC: Menu   |   H: Hint"
+            hint_txt = self.hint_font.render(hint_label, True, (255, 250, 205))
             self.screen.blit(hint_txt, (18, h - hint_txt.get_height() - 14))
 
         # --- KHỐI 2: HIỂN THỊ THÔNG BÁO AI (LUÔN HIỆN CHO CẢ 2 CHẾ ĐỘ) ---
@@ -2084,7 +2071,7 @@ class FreeCellApp:
         ty = h // 2 - 120
         self.screen.blit(msg_surf, (tx, ty))
 
-        sub_msg = self.menu_font.render("So close! Press 'R' to try again", True, (180, 180, 180))
+        sub_msg = self.menu_font.render("So close! Press R to restart this deal", True, (180, 180, 180))
         self.screen.blit(sub_msg, (w // 2 - sub_msg.get_width() // 2, ty + msg_surf.get_height() + 20))
 
 
@@ -2154,6 +2141,12 @@ class FreeCellApp:
     def _action_replay(self) -> None:
         self._play_click_sound()
         if getattr(self, "initial_game_state", None):
+            self._reset_victory_state()
+            self._cancel_pending_solver()
+            self.animator.clear()
+            self.is_animating = False
+            self._cancel_pending_hint()
+            self._clear_hint()
             self.game.set_state(self.initial_game_state.clone())
             self._update_game_from_state()
             self.history.clear()
