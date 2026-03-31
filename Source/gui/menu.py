@@ -461,7 +461,8 @@ class MenuScreen:
         self.screen.blit(hint, (90, self.screen.get_height() - 120))
         self._draw_back_door_button(self.back_button, pygame.mouse.get_pos())
 
-    def draw_easy_selector(self, easy_games: list[str], selected_index: int) -> None:
+    def draw_easy_selector(self, easy_games: list[str], selected_index: int, difficulty: str = "easy") -> None:   
+        
         h, w = self.screen.get_height(), self.screen.get_width()
 
         # --- Background ---
@@ -539,6 +540,21 @@ class MenuScreen:
         self._draw_button_state(self.easy_start_button, self.hint_font, mp, has_selection)
         pygame.draw.rect(self.screen, GOLD, self.easy_start_button.rect, width=2, border_radius=10)
         self._draw_back_door_button(self.back_button, mp)
+
+        diff_text = difficulty.upper()
+        
+        # Dùng menu_font (size to) và màu GOLD_LIGHT cho đồng bộ với tiêu đề
+        text_surf = self.menu_font.render(diff_text, True, GOLD_LIGHT)
+        shad_surf = self.menu_font.render(diff_text, True, (40, 20, 0)) # Bóng đổ cho nổi bật
+        
+        # Căn giữa hoàn hảo dựa trên khung panel
+        center_x = panel.centerx
+        center_y = self.easy_prev_button.rect.centery
+        text_rect = text_surf.get_rect(center=(center_x, center_y))
+        
+        # In bóng đổ trước, in chữ thật đè lên sau
+        self.screen.blit(shad_surf, (text_rect.x + 2, text_rect.y + 2))
+        self.screen.blit(text_surf, text_rect)
 
     # ------------------------------------------------------------------
     # Event handlers
