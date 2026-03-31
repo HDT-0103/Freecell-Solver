@@ -723,6 +723,9 @@ class FreeCellApp:
                 self.redo_stack.clear()
                 self.board.state = self.game.get_state().clone()
                 # self.board.on_reset()
+                self.game_start_tick = pygame.time.get_ticks()
+                self.timer_active = True
+                self.final_game_time = 0
                 self.board.start_deal_animation(self.game.get_state())
                 self.animator.clear()
                 self.is_animating = False
