@@ -31,7 +31,7 @@ def load_state(board_path):
     return game.get_state()
 
 
-def run_algorithm(state, algorithm_name, max_nodes=30000, max_time_seconds=15):
+def run_algorithm(state, algorithm_name, max_nodes=300000, max_time_seconds=30):
     algorithm_name = algorithm_name.lower()
     if algorithm_name == "bfs":
         return solve_bfs(state, max_nodes, max_time_seconds)

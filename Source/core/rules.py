@@ -48,6 +48,26 @@ def can_move_to_foundation(card, foundations):
     return foundations[card.suit] + 1 == card.rank
 
 
+def is_safe_to_move_to_foundation(card, foundations):
+    if not can_move_to_foundation(card, foundations):
+        return False
+
+    rank = card.rank
+    if rank <= 1:
+        return True
+
+    same_color_partner = {'C': 'S', 'S': 'C', 'H': 'D', 'D': 'H'}[card.suit]
+    opposite_colors = {'C': ('H', 'D'), 'S': ('H', 'D'), 'H': ('C', 'S'), 'D': ('C', 'S')}[card.suit]
+    opp_a, opp_b = opposite_colors
+
+
+    return (
+        foundations[opp_a] >= rank - 1
+        and foundations[opp_b] >= rank - 1
+        and foundations[same_color_partner] >= rank - 2
+    )
+
+
 def can_place_on_cascade(card, cascade):
     if not cascade:
         return True

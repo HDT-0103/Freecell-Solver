@@ -1002,6 +1002,10 @@ class FreeCellApp:
 
         self._clear_hint()
         snapshot = self.game.get_state().clone()
+        prev_state = None
+        if hasattr(self, "history") and self.history:
+            # Snapshot previous state to detect immediate backtracking hints (undo moves).
+            prev_state = self.history[-1].clone()
         self._hint_job_id += 1
         job_id = self._hint_job_id
         self._hint_pending = True
@@ -1011,24 +1015,40 @@ class FreeCellApp:
 
         def worker() -> None:
             try:
-                session = AStarSearchSession(
-                    snapshot,
-                    heuristic="blocking",
-                    heuristic_weight=2.0,
-                )
-                result = session.advance(max_nodes=35_000, max_time_seconds=0.8)
                 hint: ManualHint | None = None
-                if result.moves:
-                    first_move = result.moves[0]
-                    if self._card_from_move(snapshot, first_move) is not None:
-                        hint = ManualHint(
-                            move=first_move,
-                            source_label=self._source_label_from_move(first_move),
-                            target_label=self._target_label_from_move(first_move),
-                        )
+                immediate_move = self._immediate_foundation_hint_move(snapshot, avoid_state=prev_state)
+                if immediate_move is not None:
+                    hint = ManualHint(
+                        move=immediate_move,
+                        source_label=self._source_label_from_move(immediate_move),
+                        target_label=self._target_label_from_move(immediate_move),
+                    )
+                else:
+                    session = AStarSearchSession(
+                        snapshot,
+                        heuristic="blocking",
+                        heuristic_weight=2.0,
+                    )
+                    result = session.advance(max_nodes=35_000, max_time_seconds=0.8)
+                    if result.moves:
+                        for candidate in result.moves:
+                            if self._card_from_move(snapshot, candidate) is None:
+                                continue
+                            if prev_state is not None:
+                                try:
+                                    if rules.apply_move(snapshot, candidate) == prev_state:
+                                        continue
+                                except Exception:
+                                    continue
+                            hint = ManualHint(
+                                move=candidate,
+                                source_label=self._source_label_from_move(candidate),
+                                target_label=self._target_label_from_move(candidate),
+                            )
+                            break
 
                 if hint is None:
-                    fallback_move = self._fallback_hint_move(snapshot)
+                    fallback_move = self._fallback_hint_move(snapshot, avoid_state=prev_state)
                     if fallback_move is not None:
                         hint = ManualHint(
                             move=fallback_move,
@@ -1346,7 +1366,50 @@ class FreeCellApp:
 
         return None
 
-    def _fallback_hint_move(self, state: State) -> rules.Move | None:
+    def _immediate_foundation_hint_move(
+        self,
+        state: State,
+        *,
+        avoid_state: State | None = None,
+    ) -> rules.Move | None:
+        """Prefer an immediate move to the foundations (safe first) for manual hints."""
+        foundation_moves: list[rules.Move] = []
+        for move in rules.enumerate_legal_moves(state):
+            if move.dst_type != rules.LOCATION_FOUNDATION:
+                continue
+            if self._card_from_move(state, move) is None:
+                continue
+            if avoid_state is not None:
+                try:
+                    if rules.apply_move(state, move) == avoid_state:
+                        continue
+                except Exception:
+                    continue
+            foundation_moves.append(move)
+
+        if not foundation_moves:
+            return None
+
+        def _key(move: rules.Move) -> tuple[int, int, int]:
+            card = self._card_from_move(state, move)
+            is_safe = False
+            if card is not None and hasattr(rules, "is_safe_to_move_to_foundation"):
+                try:
+                    is_safe = bool(rules.is_safe_to_move_to_foundation(card, state.foundations))
+                except Exception:
+                    is_safe = False
+            safe_bucket = 0 if is_safe else 1
+            src_bucket = 0 if move.src_type == rules.LOCATION_FREE_CELL else 1
+            rank = getattr(card, "rank", 99) if card is not None else 99
+            return (safe_bucket, src_bucket, rank)
+
+        return min(foundation_moves, key=_key)
+
+    def _fallback_hint_move(self, state: State, *, avoid_state: State | None = None) -> rules.Move | None:
+        immediate = self._immediate_foundation_hint_move(state, avoid_state=avoid_state)
+        if immediate is not None:
+            return immediate
+
         legal_moves = rules.enumerate_legal_moves(state)
         if not legal_moves:
             return None
@@ -1361,6 +1424,18 @@ class FreeCellApp:
             if move.src_type == rules.LOCATION_CASCADE and move.dst_type == rules.LOCATION_FREE_CELL:
                 return (3, 0, 0, move.count)
             return (4, 0, 0, move.count)
+
+        if avoid_state is not None:
+            filtered: list[rules.Move] = []
+            for move in legal_moves:
+                try:
+                    if rules.apply_move(state, move) == avoid_state:
+                        continue
+                except Exception:
+                    continue
+                filtered.append(move)
+            if filtered:
+                legal_moves = filtered
 
         return min(legal_moves, key=_priority)
 
@@ -2189,6 +2264,10 @@ class FreeCellApp:
 
         self._clear_hint()
         snapshot = self.game.get_state().clone()
+        prev_state = None
+        if hasattr(self, "history") and self.history:
+            # Snapshot previous state to detect immediate backtracking hints (undo moves).
+            prev_state = self.history[-1].clone()
         self._hint_job_id += 1
         job_id = self._hint_job_id
         self._hint_pending = True
@@ -2198,24 +2277,40 @@ class FreeCellApp:
 
         def worker() -> None:
             try:
-                session = AStarSearchSession(
-                    snapshot,
-                    heuristic="blocking",
-                    heuristic_weight=2.0,
-                )
-                result = session.advance(max_nodes=35_000, max_time_seconds=0.8)
                 hint: ManualHint | None = None
-                if result.moves:
-                    first_move = result.moves[0]
-                    if self._card_from_move(snapshot, first_move) is not None:
-                        hint = ManualHint(
-                            move=first_move,
-                            source_label=self._source_label_from_move(first_move),
-                            target_label=self._target_label_from_move(first_move),
-                        )
+                immediate_move = self._immediate_foundation_hint_move(snapshot, avoid_state=prev_state)
+                if immediate_move is not None:
+                    hint = ManualHint(
+                        move=immediate_move,
+                        source_label=self._source_label_from_move(immediate_move),
+                        target_label=self._target_label_from_move(immediate_move),
+                    )
+                else:
+                    session = AStarSearchSession(
+                        snapshot,
+                        heuristic="blocking",
+                        heuristic_weight=2.0,
+                    )
+                    result = session.advance(max_nodes=35_000, max_time_seconds=0.8)
+                    if result.moves:
+                        for candidate in result.moves:
+                            if self._card_from_move(snapshot, candidate) is None:
+                                continue
+                            if prev_state is not None:
+                                try:
+                                    if rules.apply_move(snapshot, candidate) == prev_state:
+                                        continue
+                                except Exception:
+                                    continue
+                            hint = ManualHint(
+                                move=candidate,
+                                source_label=self._source_label_from_move(candidate),
+                                target_label=self._target_label_from_move(candidate),
+                            )
+                            break
 
                 if hint is None:
-                    fallback_move = self._fallback_hint_move(snapshot)
+                    fallback_move = self._fallback_hint_move(snapshot, avoid_state=prev_state)
                     if fallback_move is not None:
                         hint = ManualHint(
                             move=fallback_move,
@@ -2307,7 +2402,11 @@ class FreeCellApp:
             return cascade[idx] if 0 <= idx < len(cascade) else None
         return None
 
-    def _fallback_hint_move(self, state: State) -> rules.Move | None:
+    def _fallback_hint_move(self, state: State, *, avoid_state: State | None = None) -> rules.Move | None:
+        immediate = self._immediate_foundation_hint_move(state, avoid_state=avoid_state)
+        if immediate is not None:
+            return immediate
+
         legal_moves = rules.enumerate_legal_moves(state)
         if not legal_moves:
             return None
@@ -2322,6 +2421,18 @@ class FreeCellApp:
             if move.src_type == rules.LOCATION_CASCADE and move.dst_type == rules.LOCATION_FREE_CELL:
                 return (3, 0, 0, move.count)
             return (4, 0, 0, move.count)
+
+        if avoid_state is not None:
+            filtered: list[rules.Move] = []
+            for move in legal_moves:
+                try:
+                    if rules.apply_move(state, move) == avoid_state:
+                        continue
+                except Exception:
+                    continue
+                filtered.append(move)
+            if filtered:
+                legal_moves = filtered
 
         return min(legal_moves, key=_priority)
 

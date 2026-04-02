@@ -27,6 +27,17 @@ def test_can_move_card_to_foundation():
     assert not rules.can_move_to_foundation(Card(2, 'H'), foundations)
 
 
+def test_is_safe_to_move_to_foundation_prefers_waiting_for_opposite_colors():
+    # 2♥ is legal once A♥ is already in the foundation, but isn't considered
+    # "safe" until both black Aces are also in their foundations.
+    foundations = {'H': 1, 'D': 0, 'C': 0, 'S': 0}
+    assert rules.can_move_to_foundation(Card(2, 'H'), foundations)
+    assert not rules.is_safe_to_move_to_foundation(Card(2, 'H'), foundations)
+
+    foundations = {'H': 1, 'D': 0, 'C': 1, 'S': 1}
+    assert rules.is_safe_to_move_to_foundation(Card(2, 'H'), foundations)
+
+
 def test_enumerate_legal_moves_includes_foundation_and_free_cell_moves():
     state = State([[Card(1, 'H')], [Card(13, 'S')], [], [], [], [], [], []])
 
