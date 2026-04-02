@@ -193,6 +193,8 @@ class FreeCellApp:
         self.final_display_seconds = 0  # Thời gian chốt cuối cùng (integer giây)
         self.clock_dynamic_active = False
         self.timer_active = False
+        self.browsing_difficulty = "easy"  # Mặc định là easy
+        self.selected_deal_index = 0
 
         self.title_font = pygame.font.SysFont("georgia", 64, bold=True)
         self.menu_font = pygame.font.SysFont("georgia", 36, bold=True)
@@ -653,13 +655,14 @@ class FreeCellApp:
                     on_exit=self._trigger_exit,
                 )
             elif self.scene == "easy_select":
-                easy_games = self._sample_games_by_difficulty.get("easy", [])
+                # Lấy danh sách động thay vì fix cứng easy_games
+                current_deals = self._sample_games_by_difficulty.get(self.browsing_difficulty, [])
                 self.menu.handle_easy_selector_event(
                     event,
-                    easy_games=easy_games,
-                    selected_index=self.selected_easy_game_index,
-                    on_select=self._set_selected_easy_game_index,
-                    on_start=self._start_selected_easy_game,
+                    easy_games=current_deals, # Truyền danh sách tương ứng
+                    selected_index=self.selected_deal_index,
+                    on_select=self._set_selected_deal_index, # Đổi tên hàm callback cho đồng bộ
+                    on_start=self._start_selected_deal,     # Đổi tên hàm callback
                     on_back=self._go_menu,
                 )
             elif self.scene == "howto":
@@ -713,24 +716,12 @@ class FreeCellApp:
                 self.is_stuck = True
                 self.solver_message = "DEBUG: You pressed 'L' to trigger Lose screen."
                 self._play_lose_music()
-            elif event.key == pygame.K_r:
-                self._play_click_sound()
-                self._reset_victory_state()
-                self._cancel_pending_solver()
-                self.game.new_game()
-                self.initial_game_state = self.game.get_state().clone()
-                self.history.clear()
-                self.redo_stack.clear()
-                self.board.state = self.game.get_state().clone()
-                # self.board.on_reset()
-                self.board.start_deal_animation(self.game.get_state())
-                self.animator.clear()
-                self.is_animating = False
-                self.ai_solver_mode = False
-                self._ai_total_applied_moves = 0
-                self.solver_result = None
-                self.solver_message = ""
-                self._refresh_game_flags()
+            elif (
+                event.key == pygame.K_r
+                and not self.ai_solver_mode
+                and (self.is_stuck or rules.is_goal(self.game.get_state()))
+            ):
+                self._action_replay()
             
             
 
@@ -775,10 +766,7 @@ class FreeCellApp:
                     if rect.collidepoint(event.pos):
                         btn_name = self.bottom_buttons[i][0]
                         if btn_name == "New game": 
-                            if getattr(self, "selected_manual_difficulty", "") == "easy":
-                                self._go_easy_select()
-                            else:
-                                self._go_menu()
+                            self._go_easy_select()
                         elif btn_name == "Replay": self._action_replay()
                         elif btn_name == "Home": self._go_menu()
                         elif btn_name == "Undo": self._action_undo()
@@ -820,52 +808,49 @@ class FreeCellApp:
         self.solver_message = ""
         self._cancel_pending_hint()
         self._clear_hint()
-        self.selected_manual_difficulty = difficulty
+        
+        # Lưu độ khó người dùng vừa chọn (chuyển sang chữ thường)
+        self.selected_manual_difficulty = difficulty.lower()
 
-        if difficulty == "easy":
-            easy_games = self._sample_games_by_difficulty.get("easy", [])
-            if easy_games:
-                self.selected_easy_game_index = min(self.selected_easy_game_index, len(easy_games) - 1)
-                self.solver_message = "Manual Easy: choose a deal from the list."
-                self._go_easy_select()
-                return
+        # Dùng chung biến browsing_difficulty
+        self.browsing_difficulty = self.selected_manual_difficulty
+        self.selected_deal_index = 0 
+        
+        # Lấy danh sách file JSON tương ứng (Easy hoặc Hard)
+        deals = self._sample_games_by_difficulty.get(self.browsing_difficulty, [])
+        
+        if deals:
+            self.solver_message = f"Select a {difficulty.title()} deal from the list."
+            self._go_easy_select() 
+            return 
 
-            self.game.new_game(seed=None)
-            self._update_game_from_state()
-            self._refresh_game_flags()
-            self.solver_message = "No Easy sample deals found. Started a random shuffle."
-            self.board.set_board_bg(self._board_bgs.get("manual"))
-            self._transition_and_deal()
-            return
-        self.solver_algorithm = "ucs"
-        self.solver_label = "UCS"
-
-        loaded = self._load_next_sample_game(difficulty)
-        if loaded:
-            self.solver_message = f"Loaded {difficulty.title()} sample: {self.last_loaded_sample}"
-        else:
-            self.game.new_game()
-            self.initial_game_state = self.game.get_state().clone()
-            self.history.clear()
-            self.redo_stack.clear()
-            self.board.state = self.game.get_state().clone()
-            self.board.on_reset()
-            self._refresh_game_flags()
-            self.solver_message = f"No {difficulty.title()} sample deals found. Started a random shuffle."
-
+        # Fallback nếu thư mục không có file JSON nào
+        self.game.new_game()
+        self.initial_game_state = self.game.get_state().clone()
+        self.history.clear()
+        self.redo_stack.clear()
+        self._update_game_from_state()
+        self._refresh_game_flags()
+        self.solver_message = f"No {difficulty.title()} samples found. Started a random shuffle."
         self.board.set_board_bg(self._board_bgs.get("manual"))
         self._transition_and_deal()
 
-    def _set_selected_easy_game_index(self, index: int) -> None:
-        easy_games = self._sample_games_by_difficulty.get("easy", [])
-        if not easy_games:
-            self.selected_easy_game_index = 0
-            return
-        self.selected_easy_game_index = max(0, min(index, len(easy_games) - 1))
 
-    def _start_selected_easy_game(self, selected_index: int) -> None:
-        easy_games = self._sample_games_by_difficulty.get("easy", [])
-        if not easy_games:
+    def _set_selected_deal_index(self, index: int) -> None:
+        """Đổi tên hàm cũ thành _set_selected_deal_index để dùng chung cho mọi độ khó"""
+        deals = self._sample_games_by_difficulty.get(self.browsing_difficulty, [])
+        if not deals:
+            self.selected_deal_index = 0
+            return
+        self.selected_deal_index = max(0, min(index, len(deals) - 1))
+
+
+    def _start_selected_deal(self, selected_index: int) -> None:
+        """Đổi tên hàm cũ thành _start_selected_deal và nạp bài tự động theo độ khó"""
+        diff = getattr(self, "browsing_difficulty", "easy")
+        deals = self._sample_games_by_difficulty.get(diff, [])
+        
+        if not deals:
             self._play_click_sound()
             self.game.new_game(seed=None)
             self.initial_game_state = self.game.get_state().clone()
@@ -873,23 +858,25 @@ class FreeCellApp:
             self.redo_stack.clear()
             self._update_game_from_state()
             self._refresh_game_flags()
-            self.solver_message = "No Easy sample deals found. Started a random shuffle."
+            self.solver_message = f"No {diff.title()} sample deals found. Started a random shuffle."
             self.board.set_board_bg(self._board_bgs.get("manual"))
             self._transition_and_deal()
             return
 
-        selected_index = max(0, min(selected_index, len(easy_games) - 1))
-        self.selected_easy_game_index = selected_index
-        loaded = self._load_sample_game_by_index("easy", selected_index)
+        selected_index = max(0, min(selected_index, len(deals) - 1))
+        self.selected_deal_index = selected_index
+        
+        # Nạp đúng file theo độ khó đang chọn
+        loaded = self._load_sample_game_by_index(diff, selected_index)
         self._play_click_sound()
 
         if loaded:
-            self.solver_message = f"Loaded Easy sample: {self.last_loaded_sample}"
+            self.solver_message = f"Loaded {diff.title()} sample: {self.last_loaded_sample}"
         else:
             self.game.new_game(seed=None)
             self._update_game_from_state()
             self._refresh_game_flags()
-            self.solver_message = "Failed to load selected Easy deal. Started a random shuffle."
+            self.solver_message = "Failed to load selected deal. Started a random shuffle."
 
         self.board.set_board_bg(self._board_bgs.get("manual"))
         self._transition_and_deal()
@@ -1732,9 +1719,12 @@ class FreeCellApp:
         elif self.scene == "menu":
             self.menu.draw_menu()
         elif self.scene == "easy_select":          
+            # Lấy danh sách màn dựa trên độ khó đang duyệt (Easy hoặc Hard)
+            current_deals = self._sample_games_by_difficulty.get(self.browsing_difficulty, [])
             self.menu.draw_easy_selector(
-                self._sample_games_by_difficulty.get("easy", []),
-                self.selected_easy_game_index,
+                current_deals,
+                self.selected_deal_index,
+                self.browsing_difficulty
             )
         elif self.scene == "howto":
             self.howto_screen.draw()
@@ -1805,7 +1795,9 @@ class FreeCellApp:
             self.screen.blit(lbl, (knob_center[0] + radius + 10, self.hint_btn_rect.centery - lbl.get_height() // 2))
 
             # 5. Phím tắt trợ giúp ở góc dưới bên trái
-            hint_txt = self.hint_font.render("ESC: Menu   |   R: New Shuffle", True, (255, 250, 205))
+            show_restart_hint = self.is_stuck
+            hint_label = "ESC: Menu   |   R: Restart deal" if show_restart_hint else "ESC: Menu   |   H: Hint"
+            hint_txt = self.hint_font.render(hint_label, True, (255, 250, 205))
             self.screen.blit(hint_txt, (18, h - hint_txt.get_height() - 14))
 
         # --- KHỐI 2: HIỂN THỊ THÔNG BÁO AI (LUÔN HIỆN CHO CẢ 2 CHẾ ĐỘ) ---
@@ -2079,7 +2071,7 @@ class FreeCellApp:
         ty = h // 2 - 120
         self.screen.blit(msg_surf, (tx, ty))
 
-        sub_msg = self.menu_font.render("So close! Press 'R' to try again", True, (180, 180, 180))
+        sub_msg = self.menu_font.render("So close! Press R to restart this deal", True, (180, 180, 180))
         self.screen.blit(sub_msg, (w // 2 - sub_msg.get_width() // 2, ty + msg_surf.get_height() + 20))
 
 
@@ -2149,6 +2141,12 @@ class FreeCellApp:
     def _action_replay(self) -> None:
         self._play_click_sound()
         if getattr(self, "initial_game_state", None):
+            self._reset_victory_state()
+            self._cancel_pending_solver()
+            self.animator.clear()
+            self.is_animating = False
+            self._cancel_pending_hint()
+            self._clear_hint()
             self.game.set_state(self.initial_game_state.clone())
             self._update_game_from_state()
             self.history.clear()
