@@ -199,3 +199,16 @@ class SolverAnimator:
 			return
 
 		self._start_transition(board)
+
+	def toggle_pause(self):
+		self.status.active = not self.status.active
+
+	def step_forward(self, board):
+		if self._index < len(self._solution_path) - 1:
+			self._index += 1
+			board.apply_state(self._solution_path[self._index])
+
+	def step_backward(self, board):
+		if self._index > 0:
+			self._index -= 1
+			board.apply_state(self._solution_path[self._index])
