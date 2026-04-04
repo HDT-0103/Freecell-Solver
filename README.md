@@ -80,33 +80,6 @@
 - Bộ test đầy đủ cho từng module: BFS, DFS, A\*, Rules, State
 - Dễ dàng mở rộng và kiểm thử thêm
 
----
-
-## **Các Thuật Toán Tìm Kiếm**
-
-| Thuật Toán | Ký Hiệu | Tối Ưu? | Bộ Nhớ | Đặc Điểm |
-|------------|---------|---------|--------|----------|
-| Breadth-First Search | **BFS** | ✅ Có | Cao | Tìm lời giải ngắn nhất (số bước ít nhất) |
-| Depth-First Search | **DFS** | ❌ Không | Thấp | Nhanh, nhưng không đảm bảo tối ưu |
-| Uniform Cost Search | **UCS** | ✅ Có | Trung bình | Tối ưu theo chi phí, tương tự BFS khi đồng giá |
-| A\* Search | **A\*** | ✅ Có | Trung bình | **Nhanh nhất** — dùng heuristic dẫn đường |
-
-### Chi Tiết Từng Thuật Toán
-
-#### BFS — Breadth-First Search
-> Duyệt theo chiều rộng, đảm bảo tìm lời giải **ngắn nhất** (ít bước nhất). Phù hợp khi cần độ chính xác tuyệt đối, nhưng tốn nhiều bộ nhớ với không gian trạng thái lớn.
-
-#### DFS — Depth-First Search
-> Duyệt theo chiều sâu, tiết kiệm bộ nhớ hơn BFS. Không đảm bảo lời giải tối ưu nhưng có thể tìm ra lời giải nhanh trong nhiều tình huống.
-
-#### UCS — Uniform Cost Search
-> Mở rộng nút theo chi phí tích lũy thấp nhất. Tương đương BFS khi tất cả bước đi có cùng chi phí, nhưng linh hoạt hơn khi chi phí không đồng nhất.
-
-#### A\* — A-Star Search
-> Kết hợp chi phí thực và **hàm heuristic** để ưu tiên các trạng thái tiềm năng nhất. Thường nhanh nhất và hiệu quả nhất trong thực tế.
-
----
-
 ## **Tiêu Chí Đánh Giá**
 
 Các thuật toán được đo lường và so sánh theo 4 tiêu chí:
@@ -117,7 +90,7 @@ Bộ nhớ sử dụng (MB)       —  Tài nguyên tiêu thụ
 Số trạng thái đã duyệt    —  Mức độ khám phá không gian
 Độ dài lời giải (số bước) —  Chất lượng lời giải tìm được
 ```
-
+Xem video demo các thuật toán hoạt động thực tế: https://www.youtube.com/watch?v=Otm58rCn6DY
 ---
 
 ## **Công Nghệ Sử Dụng**
@@ -285,8 +258,6 @@ Dự án này được phát triển cho mục đích **học tập và nghiên 
 <div align="center">
 
 ## ⭐ **Nếu dự án hữu ích, hãy cho chúng tôi một ngôi sao!**
-
-[Star](https://github.com) | [Report Bug](https://github.com) | [Request Feature](https://github.com)
 
 ---
 
