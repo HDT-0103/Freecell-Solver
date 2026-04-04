@@ -16,7 +16,7 @@
 ### **KHOA CÔNG NGHỆ THÔNG TIN**
 
 **Môn học:** CSC14003 – Cơ Sở Trí Tuệ Nhân Tạo  
-**Năm học:** 2024 – 2025
+**Năm học:** 2025 – 2026
 
 ---
 
