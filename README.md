@@ -41,11 +41,11 @@
 
 ---
 
-## **Giới Thiệu**
+## 📖 **Giới Thiệu**
 
 **FreeCell Solver** là ứng dụng giải trò chơi bài **FreeCell** tự động sử dụng các thuật toán tìm kiếm Trí Tuệ Nhân Tạo. Dự án được phát triển nhằm minh họa và so sánh hiệu suất thực tế của các thuật toán tìm kiếm kinh điển trong môi trường bài toán có không gian trạng thái lớn.
 
-### **Mục Tiêu Dự Án**
+### 🎯 **Mục tiêu dự án**
 
 - **Giao Diện Trực Quan:** Chơi FreeCell với GUI Pygame thân thiện, bắt mắt
 - **Giải Tự Động bằng AI:** Áp dụng 4 thuật toán tìm kiếm để tự động giải ván bài
@@ -54,7 +54,7 @@
 
 ---
 
-## **Tính Năng Chính**
+## ✨ **Tính Năng Chính**
 
 ### **Giao Diện Đồ Họa (GUI)**
 - Giao diện Pygame trực quan, dễ sử dụng
@@ -80,7 +80,7 @@
 - Bộ test đầy đủ cho từng module: BFS, DFS, A\*, Rules, State
 - Dễ dàng mở rộng và kiểm thử thêm
 
-## **Tiêu Chí Đánh Giá**
+## 📊 **Tiêu chí đánh giá**
 
 Các thuật toán được đo lường và so sánh theo 4 tiêu chí:
 
@@ -93,7 +93,7 @@ Số trạng thái đã duyệt    —  Mức độ khám phá không gian
 Xem video demo các thuật toán hoạt động thực tế: https://www.youtube.com/watch?v=Otm58rCn6DY
 ---
 
-## **Công Nghệ Sử Dụng**
+## 🛠️ **Công Nghệ Sử Dụng**
 
 | Thư Viện | Mục Đích |
 |----------|----------|
@@ -101,12 +101,12 @@ Xem video demo các thuật toán hoạt động thực tế: https://www.youtub
 | **Pygame** | Giao diện đồ họa game |
 | **psutil** | Theo dõi tài nguyên hệ thống (RAM, CPU) |
 | **matplotlib** | Vẽ biểu đồ so sánh benchmark |
-| **moviepy** | Xuất video quá trình giải (tùy chọn) |
+| **moviepy** | Video intro, outro trong game |
 | **pytest** | Framework kiểm thử tự động |
 
 ---
 
-## **Cài Đặt**
+## 📦 **Cài đặt**
 
 ### Yêu Cầu Hệ Thống
 
@@ -139,19 +139,19 @@ python main.py
 
 ## **Hướng Dẫn Sử Dụng**
 
-### 1. Chế Độ GUI — Giao Diện Đồ Họa
+### 1️⃣ Chế Độ GUI — Giao Diện Đồ Họa
 
 ```bash
 python main.py
-# hoặc
-python main.py --mode gui
 ```
 
 **Các thao tác trong GUI:**
-- Click chuột để chọn và di chuyển bài
-- Chọn thuật toán AI từ menu thả xuống
-- Nhấn **Solve** để bắt đầu giải tự động
-- Xem quá trình giải từng bước theo animation
+
+Menu chính có 3 lựa chọn:
+
+- **Góc trái màn hình** — Xem hướng dẫn luật chơi (Instructions)
+- **Manual** — Chọn mức độ khó → chọn ván chơi → dùng chuột để di chuyển và chọn quân bài
+- **AI Solver** — Chọn thuật toán → đợi giải xong → nhấn **nút Play** để bắt đầu → xem quá trình giải từng bước theo animation
 
 **Chơi Thủ Công (Manual Mode):**
 
@@ -165,7 +165,7 @@ python main.py --mode gui
 <img width="700px" src="https://github.com/HDT-0103/Freecell-Solver/raw/main/Source/assets/readme%20gif/AI%20solver.gif" alt="AI Solver Demo">
 </div>
 
-### 2. Chế Độ Benchmark — So Sánh Thuật Toán
+### 2️⃣ Chế Độ Benchmark — So Sánh Thuật Toán
 
 ```bash
 python main.py --mode benchmark
@@ -174,46 +174,45 @@ python main.py --mode benchmark
 Chế độ này sẽ tự động:
 - Chạy tất cả 4 thuật toán trên cùng bộ ván bài
 - Thu thập đầy đủ số liệu về thời gian, bộ nhớ, số bước
-- Xuất biểu đồ so sánh trực quan
 
 ---
 
-## **Cấu Trúc Dự Án**
+## 🏗️ **Cấu trúc Dự Án**
 
 ```
 Freecell-Solver/
-├── main.py                    # Entry point của ứng dụng
-├── requirements.txt           # Danh sách dependencies
-├── conftest.py                # Cấu hình pytest
+├── 📄 main.py # Điểm vào của ứng dụng
+├── 📄 requirements.txt # Danh sách phụ thuộc
+├── 📄 conftest.py # Cấu hình pytest
 │
-├── Source/
-│   ├── core/                  # Logic cốt lõi của trò chơi
-│   │   ├── state.py           # Định nghĩa trạng thái game
-│   │   ├── rules.py           # Luật chơi FreeCell
-│   │   ├── game_service.py    # Quản lý game logic
-│   │   └── loader.py          # Load cấu hình game
+├── 📁 Nguồn/
+│ ├── 📁 core/ # Logic cốt lõi của trò chơi
+│ │ ├── state.py # Định nghĩa trạng thái game
+│ │ ├── rules.py # Luật chơi FreeCell
+│ │ ├── game_service.py # Quản lý logic trò chơi
+│ │ └── loader.py # Tải cấu hình trò chơi
 │   │
-│   ├── solvers/               # Các thuật toán AI
-│   │   ├── bfs.py             # Breadth-First Search
-│   │   ├── dfs.py             # Depth-First Search
-│   │   ├── ucs.py             # Uniform Cost Search
-│   │   └── a_star.py          # A-Star Search
+│ ├── 📁 solvers/ # Các thuật toán AI
+│ │ ├── bfs.py # Tìm kiếm theo chiều rộng đầu tiên
+│ │ ├── dfs.py # Tìm kiếm đầu tiên về độ sâu
+│ │ ├── ucs.py # Tìm kiếm chi phí thống nhất
+│ │ └── a_star.py # Tìm kiếm A-Star
 │   │
-│   ├── gui/                   # Giao diện người dùng
-│   │   ├── app.py             # Ứng dụng chính
-│   │   ├── interface.py       # Giao diện game
-│   │   ├── menu.py            # Menu chính
-│   │   ├── hud.py             # Hiển thị thông tin HUD
-│   │   ├── animation.py       # Hiệu ứng animation
-│   │   └── howto.py           # Hướng dẫn sử dụng
+│ ├── 📁 gui/ # Giao diện người dùng
+│ │ ├── app.py # Ứng dụng chính
+│ │ ├── interface.py # Giao diện game
+│ │ ├── menu.py # Chính Menu
+│ │ ├── hud.py # Hiển thị thông tin HUD
+│ │ ├── animation.py # Hiệu ứng animation
+│ │ └── howto.py # Hướng dẫn sử dụng
 │   │
-│   ├── utils/                 # Tiện ích
-│   │   └── benchmark_runner.py  # Chạy & thu thập benchmark
+│ ├── 📁 utils/ # Tiện ích
+│ │ └── benchmark_runner.py # Chạy & thu thập benchmark
 │   │
-│   ├── assets/                # Tài nguyên (hình ảnh, font...)
-│   └── config.py              # Cấu hình ứng dụng
+│ ├── 📁 assets/ # Tài nguyên (hình ảnh, phông chữ...)
+│ └── 📄 config.py # Cấu hình ứng dụng
 │
-└── tests/                     # Unit Tests
+└── 📁 kiểm tra/ # Kiểm tra đơn vị
     ├── test_bfs.py
     ├── test_dfs.py
     ├── test_a_star.py
@@ -238,14 +237,6 @@ pytest tests/test_bfs.py
 pytest tests/test_a_star.py
 pytest tests/test_rules.py
 ```
-
----
-
-## **Tài Liệu Tham Khảo**
-
-- **Luật chơi FreeCell:** [Wikipedia – FreeCell](https://en.wikipedia.org/wiki/FreeCell)
-- **Thuật toán tìm kiếm AI:** *Artificial Intelligence: A Modern Approach* — Russell & Norvig
-- **Pygame Documentation:** [pygame.org/docs](https://pygame.org/docs)
 
 ---
 
